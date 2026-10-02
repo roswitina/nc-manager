@@ -2,7 +2,7 @@
  * Nextcloud Server Manager
  * Copyright (c) 2026 roswitina@hotmail.com
  * SPDX-License-Identifier: MIT
- * Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+ * Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
  */
 :root{--bg:#0b1220;--card:#131e31;--line:#263650;--text:#e7eefb;--muted:#9fb0c8;--accent:#1683ff}
 body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0}

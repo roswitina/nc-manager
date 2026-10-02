@@ -2,7 +2,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # nc-manager-cmd – privilegierter Helfer des Nextcloud Server Managers.
 # Wird von der Web-App per sudo als root aufgerufen. Nur die Aktionen im
 # case-Block am Ende sind erlaubt; alle Argumente werden hier erneut geprüft.
@@ -27,6 +27,9 @@ NCM_NC_PATH="$(read_env NCM_NC_PATH)"
 NCM_WEBUSER="$(read_env NCM_WEBUSER)"
 BACKUP_DIR="$(read_env NCM_BACKUP_DIR)"; BACKUP_DIR=${BACKUP_DIR:-/var/backups/nc-manager}
 BACKUP_KEEP="$(read_env NCM_BACKUP_KEEP)"; [[ "$BACKUP_KEEP" =~ ^[0-9]{1,3}$ ]] || BACKUP_KEEP=3
+# Bei der Installation (als root) festgehaltenes Datenverzeichnis – Vertrauensanker für alles, was root
+# im Datenverzeichnis tut. config.php allein reicht dafür nicht, sie ist für den Webserver-Benutzer beschreibbar.
+NCM_DATADIR="$(read_env NCM_DATADIR)"; NCM_DATADIR=${NCM_DATADIR%/}
 helper() { python3 "$HELPER" "$@"; }
 [ -n "$NCM_PHP" ] && [ -n "$NCM_NC_PATH" ] && [ -n "$NCM_WEBUSER" ] || {
   echo 'Technische Konfiguration unvollständig'; exit 91
@@ -97,7 +100,8 @@ echo json_encode($o, JSON_UNESCAPED_SLASHES);' -- "$NCM_NC_PATH/config" 2>/dev/n
 }
 
 # DB-Zugangsdaten für den Dump. Nur intern verwenden und direkt per Pipe an den Helfer geben,
-# niemals ausgeben oder als Argument übergeben.
+# niemals ausgeben oder als Argument übergeben. Das Datenverzeichnis (für SQLite) kommt aus
+# /etc/nc-manager.env, nicht aus config.php; der Helfer prüft die übrigen Werte.
 nc_db_creds() {
   runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" -r '
 $d = $argv[1]; $c = [];
@@ -106,7 +110,8 @@ foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as 
 }
 $o = [];
 foreach (["dbtype", "dbhost", "dbport", "dbname", "dbuser", "dbpassword", "datadirectory"] as $k) { $o[$k] = $c[$k] ?? null; }
-echo json_encode($o);' -- "$NCM_NC_PATH/config" 2>/dev/null
+if (($argv[2] ?? "") !== "") { $o["datadirectory"] = $argv[2]; }
+echo json_encode($o);' -- "$NCM_NC_PATH/config" "$NCM_DATADIR" 2>/dev/null
 }
 
 # Redis-Konfiguration inkl. Passwort – nur per Pipe an den Helfer, nie ausgeben.
@@ -161,6 +166,43 @@ run_hook() {   # run_hook name [VAR=wert ...]
   env NCM_NC_PATH="$NCM_NC_PATH" NCM_BACKUP_DIR="$BACKUP_DIR" "$@" "$h"
 }
 
+# Datenverzeichnis prüfen, bevor root damit arbeitet (tar, mv, chown -R, rm -rf, SQLite-Datei).
+# Der Wert stammt aus config.php, die der Webserver-Benutzer ändern kann. Wer Nextcloud kompromittiert,
+# könnte dort sonst z. B. /etc eintragen und root würde es beim nächsten Restore www-data übereignen.
+# Gibt bei einem Problem den Grund aus und liefert 1.
+check_datadir() {
+  local d="$1" owner
+  [ -n "$d" ] || { echo 'Datenverzeichnis ist in config.php nicht gesetzt.'; return 1; }
+  [ -n "$NCM_DATADIR" ] || {
+    echo "Das Datenverzeichnis ist in $ENV nicht festgehalten (NCM_DATADIR fehlt). Bitte install.sh erneut ausführen."; return 1; }
+  [ "$d" = "$NCM_DATADIR" ] || {
+    echo "Datenverzeichnis in config.php ($d) weicht vom bei der Installation festgehaltenen ($NCM_DATADIR) ab." \
+         'Falls es absichtlich verschoben wurde: install.sh erneut ausführen, sonst config.php prüfen.'; return 1; }
+  case "$d" in /*) ;; *) echo "Datenverzeichnis $d ist kein absoluter Pfad."; return 1;; esac
+  case "$d/" in *//*|*/./*|*/../*) echo "Datenverzeichnis $d enthält // . oder .. – abgelehnt."; return 1;; esac
+  case "$d" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib32|/lib64|/libx32|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/backups|/var/lib|/var/log|/var/www|/var/www/html|\
+    /bin/*|/boot/*|/dev/*|/etc/*|/lib/*|/lib32/*|/lib64/*|/libx32/*|/proc/*|/root/*|/run/*|/sbin/*|/sys/*|/usr/*)
+      echo "Datenverzeichnis $d ist ein Systemverzeichnis – abgelehnt."; return 1;;
+  esac
+  [ -d "$d" ] && [ ! -L "$d" ] || { echo "Datenverzeichnis $d fehlt oder ist ein symbolischer Link."; return 1; }
+  owner=$(stat -c %U -- "$d" 2>/dev/null)
+  [ "$owner" = "$NCM_WEBUSER" ] || { echo "Datenverzeichnis $d gehört $owner, nicht $NCM_WEBUSER."; return 1; }
+  [ -e "$d/.ocdata" ] || { echo "In $d fehlt die Nextcloud-Markierung .ocdata – kein Nextcloud-Datenverzeichnis?"; return 1; }
+  case "$NCM_NC_PATH/" in "$d"/*) echo "Der Programmordner liegt im Datenverzeichnis $d – abgelehnt."; return 1;; esac
+  case "$BACKUP_DIR/" in "$d"/*) echo "Das Backup-Verzeichnis liegt im Datenverzeichnis $d – abgelehnt."; return 1;; esac
+  return 0
+}
+
+# Setzt DATADIR auf das geprüfte Datenverzeichnis; sonst Meldung und Rückgabe 1.
+DATADIR=
+load_datadir() {
+  local d why
+  d=$(nc_config | json_get datadirectory); d=${d%/}
+  if ! why=$(check_datadir "$d"); then echo "ABBRUCH: $why"; return 1; fi
+  DATADIR=$d
+}
+
 # Backup von Datenbank, Programmcode, config.php und optional Benutzerdaten.
 #   do_backup <mit_daten 0|1> <grund> <geschützter Name für prune>
 # Setzt BACKUP_NAME auf den Namen des neuen Backups.
@@ -170,8 +212,9 @@ do_backup() {
   local ts dir datadir parent base size dsize=0 free dbtype rc
   ts=$(date +%Y%m%d-%H%M%S); dir="$BACKUP_DIR/$ts"
   while [ -e "$dir" ]; do sleep 1; ts=$(date +%Y%m%d-%H%M%S); dir="$BACKUP_DIR/$ts"; done
+  load_datadir || return 38
+  datadir=$DATADIR
   mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
-  datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
   dbtype=$(nc_config | json_get dbtype)
   size=$(du -sk ${datadir:+"--exclude=$datadir"} "$NCM_NC_PATH" | awk '{print $1}')
   if [ "$include_data" = 1 ]; then
@@ -212,7 +255,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.3"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.4"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
@@ -260,7 +303,8 @@ do_restore() {
   bnc=$(helper backup_info "$BACKUP_DIR" "$name" nc_path); bdata=$(helper backup_info "$BACKUP_DIR" "$name" datadir)
   bdata=${bdata%/}
   with_data=$(helper backup_info "$BACKUP_DIR" "$name" user_data_included)
-  datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
+  load_datadir || { echo 'Es wurde nichts verändert.'; return 67; }
+  datadir=$DATADIR
   parent=$(dirname "$NCM_NC_PATH"); base=$(basename "$NCM_NC_PATH")
   [ "${bnc%/}" = "$NCM_NC_PATH" ] || { echo "ABBRUCH: Backup gehört zu $bnc, nicht zu $NCM_NC_PATH."; return 67; }
   [ -z "$bdata" ] || [ "$bdata" = "$datadir" ] || { echo "ABBRUCH: Datenverzeichnis im Backup ($bdata) weicht vom aktuellen ($datadir) ab."; return 67; }
@@ -583,7 +627,9 @@ case "$ACTION" in
    datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
    inside=false; case "$datadir/" in "$NCM_NC_PATH"/*) inside=true;; esac
    mp=false; [ -n "$datadir" ] && mountpoint -q "$datadir" && mp=true
+   dd_problem=$(check_datadir "$datadir") && dd_problem=""
    json_out nc_path "$NCM_NC_PATH" datadir "$datadir" datadir_inside "$inside" datadir_mountpoint "$mp" \
+     datadir_problem "$dd_problem" \
      free_code_kb "$(df -Pk "$(dirname "$NCM_NC_PATH")" | awk 'NR==2{print $4}')" \
      free_data_kb "$( [ -n "$datadir" ] && df -Pk "$(dirname "$datadir")" | awk 'NR==2{print $4}')" \
      free_backup_kb "$(df -Pk "$BACKUP_DIR" | awk 'NR==2{print $4}')" ;;

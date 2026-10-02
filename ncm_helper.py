@@ -2,7 +2,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Hilfsfunktionen für nc-manager-cmd. Läuft als root, installiert root-eigen
 unter /usr/local/lib/nc-manager/ncm_helper.py.
 
@@ -317,9 +317,61 @@ def _opt(v):
     return '"' + str(v).replace('\\', '\\\\').replace('"', '\\"') + '"'
 
 
+_CTRL = re.compile(r'[\x00-\x1f\x7f]')
+
+
+def _db_conf(c):
+    """Prüft die Datenbank-Angaben aus config.php, bevor sie (als root) verwendet werden.
+
+    config.php ist für den Webserver-Benutzer beschreibbar. Ohne Prüfung könnten z. B. Zeilenumbrüche
+    zusätzliche Optionen in die MySQL-Optionsdatei schreiben (etwa result-file=…), ein Datenbankname
+    mit führendem '-' als Programm-Option gelten oder ein SQLite-Name mit '../' aus dem
+    Datenverzeichnis herausführen. Wirft ValueError mit verständlicher Meldung."""
+    if not isinstance(c, dict):
+        raise ValueError('Datenbank-Konfiguration nicht lesbar')
+    for k in ('dbtype', 'dbhost', 'dbport', 'dbname', 'dbuser', 'dbpassword', 'datadirectory'):
+        v = c.get(k)
+        if v is None:
+            continue
+        if not isinstance(v, (str, int)) or isinstance(v, bool):
+            raise ValueError(f'{k} in config.php hat einen ungültigen Typ')
+        if _CTRL.search(str(v)):
+            raise ValueError(f'{k} in config.php enthält Steuerzeichen (z. B. Zeilenumbruch) – abgelehnt')
+    for k in ('dbhost', 'dbname', 'dbuser'):
+        if str(c.get(k) or '').startswith('-'):
+            raise ValueError(f'{k} in config.php darf nicht mit "-" beginnen')
+    port = str(c.get('dbport') or '')
+    if port and not port.isdigit():
+        raise ValueError('dbport in config.php ist keine Zahl')
+    host, hport, sock = _split_host(c.get('dbhost'), port)
+    if hport and not str(hport).isdigit():
+        raise ValueError('Port in dbhost ist keine Zahl')
+    if len(str(c.get('dbname') or '')) > 64:
+        raise ValueError('dbname in config.php ist zu lang')
+    if (c.get('dbtype') or 'sqlite3') == 'sqlite3':
+        name = str(c.get('dbname') or 'owncloud')
+        if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}', name):
+            raise ValueError('dbname für SQLite darf nur Buchstaben, Ziffern, . _ - enthalten')
+        if not str(c.get('datadirectory') or '').startswith('/'):
+            raise ValueError('Datenverzeichnis für SQLite fehlt oder ist kein absoluter Pfad')
+    return c
+
+
+def _read_db_conf():
+    """Zugangsdaten von stdin lesen und prüfen; bei Fehlern mit Meldung beenden."""
+    try:
+        return _db_conf(json.load(sys.stdin))
+    except ValueError as e:
+        sys.exit(f'FEHLER: {e}')
+
+
+def _sqlite_file(c):
+    return os.path.join(str(c.get('datadirectory')), str(c.get('dbname') or 'owncloud') + '.db')
+
+
 def cmd_db_dump(target):
     """DB-Dump nach target (gzip). Zugangsdaten als JSON über stdin."""
-    c = json.load(sys.stdin)
+    c = _read_db_conf()
     dbtype = c.get('dbtype') or 'sqlite3'
     tmp = target + '.part'
     try:
@@ -327,21 +379,11 @@ def cmd_db_dump(target):
             tool = shutil.which('mariadb-dump') or shutil.which('mysqldump')
             if not tool:
                 sys.exit('FEHLER: mysqldump/mariadb-dump nicht gefunden (Paket mariadb-client)')
-            host, port, sock = _split_host(c.get('dbhost'), str(c.get('dbport') or ''))
-            fd, cnf = tempfile.mkstemp(prefix='ncm-', suffix='.cnf')
+            cnf = _mysql_cnf(c)
             try:
-                with os.fdopen(fd, 'w') as f:
-                    f.write('[client]\n')
-                    f.write(f"user={_opt(c.get('dbuser', ''))}\npassword={_opt(c.get('dbpassword', ''))}\n")
-                    if sock:
-                        f.write(f'socket={_opt(sock)}\n')
-                    else:
-                        f.write(f'host={_opt(host)}\n')
-                        if port:
-                            f.write(f'port={port}\n')
                 cmd = [tool, f'--defaults-extra-file={cnf}', '--single-transaction', '--quick',
                        '--default-character-set=utf8mb4', '--no-tablespaces', '--routines', '--triggers',
-                       c.get('dbname', 'nextcloud')]
+                       str(c.get('dbname') or 'nextcloud')]
                 _dump_to_gz(cmd, tmp, os.environ)
             finally:
                 os.unlink(cnf)
@@ -351,12 +393,12 @@ def cmd_db_dump(target):
                 sys.exit('FEHLER: pg_dump nicht gefunden (Paket postgresql-client)')
             host, port, sock = _split_host(c.get('dbhost'), str(c.get('dbport') or ''))
             env = dict(os.environ, PGPASSWORD=str(c.get('dbpassword', '')))
-            cmd = [tool, '-h', sock or host, '-U', str(c.get('dbuser', '')), '--no-owner', '-d', c.get('dbname', 'nextcloud')]
+            cmd = [tool, '-h', sock or host, '-U', str(c.get('dbuser', '')), '--no-owner', '-d', str(c.get('dbname') or 'nextcloud')]
             if port:
                 cmd[1:1] = ['-p', port]
             _dump_to_gz(cmd, tmp, env)
         elif dbtype == 'sqlite3':
-            src = os.path.join(c.get('datadirectory', ''), (c.get('dbname') or 'owncloud') + '.db')
+            src = _sqlite_file(c)
             raw = tmp + '.db'
             s, d = sqlite3.connect(f'file:{src}?mode=ro', uri=True), sqlite3.connect(raw)
             with d:
@@ -750,7 +792,7 @@ def cmd_db_restore(source, webuser):
     Tabellen übrig bleiben (sonst scheitert das nächste Upgrade). PostgreSQL: alles in EINER
     Transaktion mit ON_ERROR_STOP – bei einem Fehler bleibt die Datenbank unverändert.
     """
-    c = json.load(sys.stdin)
+    c = _read_db_conf()
     typ = c.get('dbtype') or 'sqlite3'
     if not os.path.isfile(source):
         sys.exit(f'FEHLER: {source} fehlt')
@@ -799,7 +841,7 @@ def cmd_db_restore(source, webuser):
         if rc:
             sys.exit(f'FEHLER: Import fehlgeschlagen, Datenbank unverändert: {_first_error(err_)[:3000]}')
     elif typ == 'sqlite3':
-        target = os.path.join(str(c.get('datadirectory') or ''), (c.get('dbname') or 'owncloud') + '.db')
+        target = _sqlite_file(c)
         tmp = target + '.ncm-restore'
         with gzip.open(source, 'rb') as fi, open(tmp, 'wb') as fo:
             shutil.copyfileobj(fi, fo, 1024 * 1024)
@@ -837,6 +879,7 @@ def cmd_db_info():
     typ = c.get('dbtype') or 'sqlite3'
     res = {'type': typ, 'host': c.get('dbhost'), 'name': c.get('dbname'), 'ok': False}
     try:
+        _db_conf(c)
         if typ == 'mysql':
             tool = _mysql_tool()
             if not tool:
@@ -869,7 +912,7 @@ def cmd_db_info():
             res.update(ok=True, version=v.split(',')[0], size_bytes=int(size), tables=int(tables),
                        max_connections=int(maxc))
         else:
-            fp = os.path.join(str(c.get('datadirectory') or ''), (c.get('dbname') or 'owncloud') + '.db')
+            fp = _sqlite_file(c)
             con = sqlite3.connect(f'file:{fp}?mode=ro', uri=True)
             tables = con.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0]
             con.close()

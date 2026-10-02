@@ -1,143 +1,243 @@
-# Nextcloud Server Manager
+# Nextcloud Server Manager v0.6.4
 
-**Weboberfläche, die Prüfung, Backup, Update, PHP-Konfiguration, Wartung und Logs einer selbst gehosteten Nextcloud an einer Stelle bündelt – mit Protokoll jeder Aktion.**
+Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
 
-![Version](https://img.shields.io/badge/version-0.6.3-blue)
-![Lizenz](https://img.shields.io/badge/lizenz-MIT-green)
-![Plattform](https://img.shields.io/badge/Debian%20%7C%20Ubuntu%20%7C%20DietPi-lightgrey)
-![Status](https://img.shields.io/badge/status-Testversion-orange)
+> **Wichtig:** Die Software wird unentgeltlich und „wie besehen“ ohne jede Gewährleistung bereitgestellt.
+> Sie führt Aktionen mit Root-Rechten aus (Updates, Wiederherstellung der Datenbank, Löschen von Backups,
+> Änderungen an PHP), die Daten unwiderruflich verändern oder löschen können. Nutzung auf eigenes Risiko –
+> vorher ein unabhängiges Backup bzw. einen Snapshot anlegen und zuerst auf einer Testinstanz ausprobieren.
+> Nextcloud ist eine Marke der Nextcloud GmbH; dieses Projekt ist nicht mit ihr verbunden.
 
-> [!WARNING]
-> **Testversion.** Der Manager führt Aktionen mit Root-Rechten aus (Updates, Wiederherstellung der Datenbank,
-> Löschen von Backups, Änderungen an PHP). Bitte zuerst auf einer Testinstanz ausprobieren und vorher ein
-> unabhängiges Backup bzw. einen Snapshot anlegen. Nutzung auf eigenes Risiko – siehe [Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md).
+Weboberfläche für den Betrieb einer Nextcloud auf Debian, Ubuntu und DietPi:
+Dashboard, Nextcloud-Prüfungen, PHP- und PHP-FPM-Konfiguration, App-Updates, Backups mit Prüfung
+und Wiederherstellung, Diagnose, Logs, Wartungsbefehle und Update-Assistent.
 
-## Funktionen
-
-| Seite | Was sie kann |
-|---|---|
-| **Dashboard** | Zustand von Nextcloud, System, PHP, Datenbank, Webserver, Speicher und Hintergrundjobs auf einen Blick |
-| **Prüfungen** | Ergebnis von `occ setupchecks` – dieselben Hinweise wie die Nextcloud-Verwaltungsübersicht |
-| **PHP** | Wirksame Werte für CLI und FPM (inkl. `.user.ini`/`.htaccess`), Empfehlungen mit Quelle, Fundstellen in den INI-Dateien; Werte setzen mit Konfigurationstest und Rückrollen |
-| **PHP-FPM** | Prozess-Pool, Speicher je Worker, Treffer „max_children erreicht“, berechneter Vorschlag zum Übernehmen |
-| **Apps** | Verfügbare App-Updates, einzeln oder alle installieren |
-| **Update** | Vorprüfung, Nextcloud-Update mit Backup davor und optional allen App-Updates |
-| **Backups** | Datenbank, Code und config.php, optional mit Benutzerdaten; SHA-256-Prüfsummen, echte Prüfung, geführte Wiederherstellung mit Sicherheits-Backup |
-| **Diagnose** | Datenbank, Redis und Cron mit konkreten Hinweisen |
-| **Wartung** | Repair, fehlende Indizes/Spalten/Schlüssel, BigInt, Dateien einlesen, Aufräumen, Wartungsmodus |
-| **Logs** | nextcloud.log mit Filter, archivieren und leeren, Rotation und Log-Level einstellen; Fehlerlogs von PHP-FPM und Webserver |
-| **Protokoll** | Die letzten 500 Aktionen mit Ausgabe und Exit-Code |
-
-Lange Aktionen laufen als Hintergrund-Job mit Live-Ausgabe, es läuft immer nur eine ändernde Aktion gleichzeitig.
-Über [Hooks](docs/DOKUMENTATION.md#konfiguration) lassen sich eigene Skripte vor/nach Updates und nach Backups einhängen
-(z. B. Backup aufs NAS kopieren).
-
-## Voraussetzungen
-
-- Debian 11+, Ubuntu 22.04+ oder DietPi (auch Raspberry Pi), mit systemd und apt
-- Eine laufende Nextcloud (klassische Installation, z. B. unter `/var/www/nextcloud`) mit Apache oder nginx und PHP-FPM bzw. mod_php
-- MariaDB/MySQL, PostgreSQL oder SQLite
-- root-Zugang für die Installation
-
-Nicht unterstützt: Docker, Snap und Nextcloud AIO.
-
-## Installation
-
-Aktuelles Archiv von der [Releases-Seite](../../releases) laden, dann auf dem Server:
+## Installation / Upgrade
 
 ```bash
-tar xzf nc-manager-v0.6.3.tar.gz
-cd nc-manager-v0.6.3
+tar xzf nc-manager-v0.6.4.tar.gz && cd nc-manager-v0.6.4
 sudo ./install.sh
 ```
 
-Oder direkt aus dem Repository:
-
-```bash
-git clone https://github.com/roswitina/nc-manager.git
-cd nc-manager
-sudo ./install.sh
-```
-
-Der Installer erkennt Nextcloud-Pfad, Webserver-Benutzer und PHP-Version selbst und fragt nur nach Zugangsdaten,
-Zugriffsart und Backup-Ziel. Ein Upgrade übernimmt die bestehende Konfiguration – einfach die neue Version
-genauso installieren. Unbeaufsichtigt: `NCM_ACCEPT_LICENSE=ja` setzen.
+Ein Upgrade von v0.4.3 übernimmt Benutzer, Passwort, Secret, Port und Bind-Adresse.
+Das bisherige Protokoll wird übernommen, reine Lese-Aufrufe (Dashboard usw.) werden dabei aussortiert.
 
 ### Zugriff
 
-Standard und empfohlen ist **„nur localhost“** (Port 8787):
+Empfohlen ist **„nur localhost“**. Dann gibt es zwei Wege:
 
-```bash
-# vom eigenen Rechner aus
-ssh -L 8787:127.0.0.1:8787 user@server
-# dann im Browser: http://localhost:8787
-```
+- **SSH-Tunnel** vom eigenen Rechner: `ssh -L 8787:127.0.0.1:8787 user@server`, dann `http://localhost:8787`
+- **HTTPS-Reverse-Proxy** (im Installer mit „j“ bestätigen, damit Cookies `Secure` werden). Beispiel nginx:
 
-Alternativ hinter einem **HTTPS-Reverse-Proxy** (nginx/Apache) – Beispiele in der
-[Dokumentation](docs/DOKUMENTATION.md#zugriff). Die Option „LAN“ gibt es, sie überträgt Passwort und Sitzung aber unverschlüsselt.
+  ```nginx
+  location /  {  # eigener server-Block, z.B. manager.example.lan
+      proxy_pass http://127.0.0.1:8787;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $remote_addr;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_read_timeout 300s;
+  }
+  ```
 
-### Deinstallation
+Die Option „LAN“ funktioniert weiterhin, überträgt Passwort und Sitzung aber unverschlüsselt.
 
-```bash
-sudo ./uninstall.sh           # Programm entfernen, Konfiguration und Protokoll bleiben
-sudo ./uninstall.sh --purge   # zusätzlich Konfiguration, Protokoll und Systembenutzer
-```
+## Änderungen in 0.6.4 (Sicherheit)
 
-Backups, Nextcloud selbst und die vom Manager gesetzten PHP-Werte bleiben in beiden Fällen erhalten.
+`config.php` gehört dem Webserver-Benutzer. Wer Nextcloud kompromittiert (z. B. über eine Lücke in einer App),
+kann sie ändern. Werte daraus werden jetzt nicht mehr ungeprüft verwendet, wenn der Wrapper als root arbeitet:
 
-## Sicherheit
+- **Datenverzeichnis:** Der Installer liest `datadirectory` aus und hält es in `/etc/nc-manager.env` fest
+  (`NCM_DATADIR`, nur für root lesbar). Backup und Wiederherstellung verwenden das Datenverzeichnis nur, wenn
+  config.php damit übereinstimmt, der Ordner existiert, kein symbolischer Link und kein Systemverzeichnis ist,
+  dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält. Sonst bricht die Aktion ab,
+  ohne etwas zu verändern (Exit-Code 38 bei Backups, 67 bei der Wiederherstellung). Vorher hätte ein
+  manipulierter Pfad (z. B. `/etc`) bei einer Wiederherstellung mit Benutzerdaten von root verschoben und
+  per `chown -R` dem Webserver-Benutzer übereignet werden können.
+- **Datenbank-Zugangsdaten:** Host, Port, Name, Benutzer und Passwort werden vor der Verwendung geprüft.
+  Abgelehnt werden Steuerzeichen (z. B. Zeilenumbrüche, mit denen sich zusätzliche Optionen wie `result-file=`
+  in die MySQL-Optionsdatei schreiben ließen), Werte mit führendem `-`, nicht-numerische Ports und
+  SQLite-Datenbanknamen mit `/` oder `..`.
+- Die Seite „Wiederherstellen“ zeigt den Grund an, wenn das Datenverzeichnis nicht vertrauenswürdig ist.
 
-- Die Web-App läuft als eigener Systembenutzer `ncmanager` **ohne** Root-Rechte.
-- Per sudo darf sie genau einen Befehl aufrufen: den Wrapper `nc-manager-cmd` mit fester Liste erlaubter Aktionen und geprüften Argumenten.
-- `occ`, der Updater und das Nextcloud-Log werden nur als Webserver-Benutzer angesprochen, nie als root.
-- CSRF-Schutz, `SameSite=Strict`-Cookies, Login-Sperre nach 5 Fehlversuchen, Content-Security-Policy ohne Inline-Skripte.
-- Zugangsdaten (Datenbank, Redis) erscheinen nie als Prozess-Argument; Backups sind nur für root lesbar.
+**Upgrade:** Einfach `sudo ./install.sh` ausführen, das Datenverzeichnis wird dabei festgehalten. Ohne erneute
+Installation verweigern Backup und Wiederherstellung den Dienst mit dem Hinweis, install.sh auszuführen.
+**Datenverzeichnis verschoben?** Danach `sudo ./install.sh` erneut ausführen. Der Installer zeigt alten und neuen
+Pfad und übernimmt den neuen nur nach Bestätigung.
 
-Details: [Sicherheitskonzept](docs/DOKUMENTATION.md#sicherheitskonzept). Sicherheitslücken bitte nicht öffentlich
-als Issue melden, sondern per Mail an roswitina@hotmail.com.
+## Änderungen in 0.6.3
 
-## Dokumentation
+- **Logs: Archivieren und leeren.** Das Nextcloud-Log wird komprimiert ins Backup-Verzeichnis kopiert
+  (`logs/nextcloud.log.<Zeit>.gz`, nur für root lesbar, die letzten 10 bleiben, einstellbar mit `NCM_LOG_ARCHIVE_KEEP`)
+  und danach geleert. Besitzer und Rechte der Datei bleiben dabei erhalten. Ist das Archiv fehlerhaft, wird nicht geleert.
+- **Logs: Größe und Rotation.** Die Seite zeigt Datei, Größe, die ältere Datei `nextcloud.log.1`, die Rotationsgrenze
+  (`log_rotate_size`, Nextcloud-Standard 100 MB) und das Log-Level. Rotation (10 MB bis 500 MB oder aus) und Log-Level
+  lassen sich direkt einstellen (`occ log:file --rotate-size`, `occ log:manage --level`).
+- **Logs: „Nur neue Einträge ab jetzt“.** Blendet ältere Einträge aus, ohne etwas zu löschen. Der Zeitpunkt gilt pro Sitzung.
+- **Sicherheit:** Der Pfad des Nextcloud-Logs stammt aus config.php, die der Webserver-Benutzer ändern kann. Lesen,
+  Archivieren und Leeren laufen deshalb als Webserver-Benutzer, nicht als root. So lassen sich über einen manipulierten
+  Pfad keine Systemdateien lesen oder leeren.
 
-- 📖 [Vollständige Programmdokumentation](docs/DOKUMENTATION.md) – Installation, Bedienung, Konfiguration, Fehlerbehebung, Exit-Codes
-- 📝 [Änderungen](CHANGELOG.md)
-- ⚖️ [Lizenz](LICENSE.md) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
+## Änderungen in 0.6.2
+
+- Urheberangabe (roswitina@hotmail.com), MIT-Lizenz (`LICENSE`) und ausführlicher Gewährleistungs- und
+  Haftungsausschluss (`HAFTUNGSAUSSCHLUSS.md`, mit englischer Kurzfassung).
+- Urheber- und Lizenzhinweis (SPDX) in allen Quelldateien.
+- Der Installer zeigt den Hinweis an und verlangt eine Bestätigung. Bei unbeaufsichtigter Installation lässt sich
+  das mit `NCM_ACCEPT_LICENSE=ja` überspringen.
+- Die Oberfläche hat eine Fußzeile mit Urheber und Lizenz sowie die öffentliche Seite `/lizenz`.
+- Funktional unverändert gegenüber 0.6.1.
+
+## Änderungen in 0.6.1
+
+Basis ist 0.5.2. Die Ideen aus dem Entwicklungsstand 0.6.0 sind übernommen, dessen Fehler behoben.
+
+**Backups**
+- Jedes Backup hat SHA-256-Prüfsummen (`checksums.sha256`), die beim Erstellen geschrieben werden.
+- Optionales **Vollbackup mit Benutzerdaten**. Nextcloud läuft dabei im Wartungsmodus, damit Datenbank und Dateien
+  zusammenpassen. Der Wartungsmodus wird auch bei einem Abbruch wieder ausgeschaltet. Ändert sich während des Sicherns
+  eine einzelne Datei (tar-Code 1), gibt es nur einen Hinweis, das Backup bleibt erhalten.
+- Die Liste zeigt pro Backup „mit/ohne Benutzerdaten“, den Prüfstatus und den Anlass.
+- **Prüfung** als Hintergrund-Job: Prüfsummen-Abgleich, vollständiges Entpacken von Dump und Archiven,
+  Abschlusszeile des Dumps (erkennt abgeschnittene Dumps), `integrity_check` bei SQLite, Vollständigkeit des
+  Programmcodes. Das Ergebnis steht in `verify.json` und in der Liste.
+
+**Wiederherstellung (neu)**
+- Assistent mit Vorprüfung und Bestätigung durch Eintippen von WIEDERHERSTELLEN. Der Ablauf:
+  Backup prüfen → Zuordnung und Platz prüfen → Sicherheits-Backup des aktuellen Stands → Code vorbereiten und
+  Wartungsmodus an → Benutzerdaten (falls enthalten) → Datenbank → Code austauschen → Wartungsmodus aus.
+- MySQL/MariaDB: Vor dem Import werden alle Tabellen gelöscht. Sonst bleiben nach dem Backup entstandene Tabellen
+  übrig und das nächste Upgrade scheitert. Scheitert der Import, wird automatisch das Sicherheits-Backup eingespielt.
+- PostgreSQL: Der Import läuft in einer Transaktion mit ON_ERROR_STOP und ist damit ganz oder gar nicht.
+- SQLite: Besitzer und Rechte der Datei bleiben erhalten, alte -wal/-shm-Dateien werden beiseitegelegt.
+- Alte Ordner werden nur umbenannt (`.ncm-before-restore-…`). Bei einem Fehler bleibt der Wartungsmodus an.
+- Verweigert wird der Restore bei Backups einer anderen Installation, bei einem Datenverzeichnis im Programmordner,
+  bei einem Datenverzeichnis als eigenem Mountpoint (nur bei Vollbackups) und bei zu wenig Platz.
+
+**Weitere Neuerungen**
+- **Diagnose-Seite:** Datenbank (Version, Größe, Tabellen, max_connections), Redis (Erreichbarkeit mit den Zugangsdaten
+  aus config.php; das Passwort verlässt den Wrapper nie) und Hintergrundjobs (Modus, letzter Lauf, Cron-Eintrag/Timer)
+  mit konkreten Hinweisen.
+- **PHP: „Wo stehen die Werte?“** Fundstellen jedes Werts in den tatsächlich geladenen INI-Dateien, die wirksame ist markiert.
+- **Hooks** in `/etc/nc-manager/hooks/`: `pre-update` (bei Fehler kein Update), `post-update` und `post-backup`
+  (z.B. Kopie auf ein NAS, mit `NCM_BACKUP_PATH`). Ausgeführt werden nur root-eigene Dateien, die nicht für
+  Gruppe/Andere beschreibbar sind.
+- **Update-Vorprüfung** zeigt das letzte Backup (mit/ohne Daten, Prüfstatus) und verfügbare App-Updates.
+- Kurzzeit-Cache für Dashboard, PHP-Plattform und FPM-Daten. Er wird nach jeder Änderung geleert.
+- **Installer-Self-Test** (Wrapper/occ, Dashboard-Daten, Login-Seite) und zusätzliche systemd-Härtung.
+  `ProtectHome` ist entfallen, weil es auch dem root-Wrapper den Zugriff auf /home sperrte (Backups/Daten unter /home).
+
+## Änderungen in 0.5.2
+
+- **PHP-Empfehlungen mit Grundlage und Quelle:** Zu jedem Wert steht, worauf er beruht.
+  „Doku“ heißt, die Nextcloud-Dokumentation nennt den Wert ausdrücklich (memory_limit, output_buffering).
+  „Doku-Beispiel“ heißt, es ist ein Beispielwert der Doku, den man an die eigenen Dateigrößen anpasst (Upload-Größen, Zeitlimits).
+  „Richtwert“ heißt, die Doku nennt keinen festen Wert, empfohlen wird der PHP-Standard bzw. ein Erfahrungswert (OPcache).
+  Jede Empfehlung verlinkt die passende Seite der Nextcloud-Dokumentation.
+- **Wirksamer Web-Wert:** Die Seite berücksichtigt jetzt Nextclouds eigene .user.ini (gilt für PHP-FPM) und die
+  php_value-Zeilen der .htaccess (gilt für Apache mit mod_php). Bei älteren Nextcloud-Versionen setzt die .user.ini z.B.
+  upload_max_filesize=511M und überstimmt damit die PHP-Konfiguration. Die Seite zeigt das an und warnt.
+  Diese Dateien ändert der Manager bewusst nicht, weil Nextcloud sie bei Updates ersetzt.
+- **output_buffering** ist neu als setzbarer Wert (Doku: muss 0 sein).
+
+## Änderungen in 0.5.1 (Hotfix)
+
+- Logs-Seite: HTTP 500 behoben. Der Wrapper hat den Log-Inhalt als Kommandozeilen-Argument weitergegeben,
+  was Linux ab 128 KB ablehnt („Argument list too long“) – bei normalen Logs schon ab ca. 500 Zeilen.
+  Große Daten (Logs, App-Liste, Core-Konfiguration) laufen jetzt über temporäre Dateien, die automatisch gelöscht werden.
+- Die Logs-Seite zeigt Fehler des Wrappers als Meldung an, statt abzustürzen. Einträge mit ungewöhnlichem Level stören nicht mehr.
+- Unerwartete Fehler zeigen eine verständliche Seite mit Hinweis auf `journalctl -u nc-manager`.
+- Die Anleitung WIEDERHERSTELLEN.txt in Backups spielt erst die Datenbank, dann den Programmcode zurück.
+- Neue Tests für den echten Wrapper (laufen als root mit PHP).
+
+## Änderungen in 0.5.0
+
+- **Prüfungen:** Zeigt das Ergebnis von `occ setupchecks` (ab Nextcloud 28), also dieselben Hinweise wie die
+  Verwaltungsübersicht, nach Schwere sortiert und mit Doku-Links. Das Ergebnis wird zwischengespeichert, das Dashboard
+  zeigt eine Zusammenfassung. Nach jeder Wartungsaktion wird automatisch neu geprüft.
+- **Apps:** Verfügbare App-Updates mit installierter und neuer Version. Einzelne oder alle Apps lassen sich aktualisieren,
+  dazu gibt es eine Liste der aktivierten und deaktivierten Apps. Beim Nextcloud-Update kann man optional alle App-Updates mit ausführen.
+- **Backups:** Datenbank-Dump (MySQL/MariaDB, PostgreSQL, SQLite), Programmcode ohne Datenverzeichnis und config.php,
+  jeweils mit Anleitung `WIEDERHERSTELLEN.txt`. Backups lassen sich manuell oder automatisch vor dem Update erstellen
+  (Standard). Ziel und Anzahl der aufbewahrten Backups fragt der Installer ab (`NCM_BACKUP_DIR`, `NCM_BACKUP_KEEP`).
+  DB-Zugangsdaten werden nie als Argument übergeben, sondern nur über stdin und eine temporäre 600-Datei.
+- **Logs:** nextcloud.log mit Filter nach Level und Suchtext, Ausnahmen werden kompakt angezeigt.
+  Dazu die letzten Zeilen aus dem PHP-FPM- und Webserver-Fehlerlog.
+- **PHP-FPM:** Pool-Einstellungen, laufende Worker und deren Speicher (PSS), sowie die Zahl der Treffer
+  „max_children erreicht“ im Log. Ein Vorschlag wird aus RAM und gemessenem Speicher je Worker berechnet und lässt sich
+  mit einem Klick übernehmen. Eigene Werte sind ebenfalls möglich. Geschrieben wird nur in
+  `pool.d/zzzz-nextcloud-manager.conf`, vorher läuft `php-fpm -t` mit Rollback.
+- **Aufräumen** auf der Wartungsseite: `files:scan --all`, `files:cleanup`, `trashbin:expire`, `versions:expire`.
+  Dazu, rot markiert und mit Rückfrage, Papierkorb bzw. alle Versionen leeren.
+- Neue Tab-Navigation, die auf dem Handy horizontal scrollt.
+
+## Änderungen in 0.4.5
+
+- PHP-Seite: Für jede änderbare Einstellung werden der aktuelle Web/FPM-Wert, der CLI-Wert und die Empfehlung aus dem Nextcloud-Admin-Handbuch angezeigt.
+  Zu niedrige Werte sind markiert und lassen sich mit einem Klick auf die Empfehlung setzen.
+  Höhere Werte bleiben unangetastet, es gibt nie einen Vorschlag zum Herabsetzen.
+- Das Formular „Eigenen Wert setzen“ ist mit dem aktuellen Wert vorausgefüllt und aktualisiert sich bei Auswahl einer anderen Einstellung.
+- Warnung, wenn `post_max_size` kleiner als `upload_max_filesize` ist.
+
+## Änderungen in 0.4.4
+
+**Fehlerbehebungen**
+- Lange Aktionen (Update, Repair, BigInt, Indizes …) laufen als Hintergrund-Job mit Live-Ausgabe.
+  Bisher brach der Gunicorn-Worker-Timeout (30 s) sie im Browser ab und es entstand kein Protokolleintrag.
+- Das Update lässt sich nicht mehr per `POST /run/nextcloud_update` ohne Backup-Bestätigung starten.
+- Ändernde Aktionen sind gesperrt (`flock`), solange eine andere läuft. Kein doppeltes Update durch Doppelklick.
+- PHP: Es wird jede laufende FPM-Version neu geladen, in die geschrieben wurde, nicht nur die CLI-Version.
+  Vorher läuft `php-fpm -t`, bei Fehlern wird zurückgerollt. Werte werden pro Einstellung validiert (z.B. `512M`, `-1`, Sekunden).
+- occ läuft mit `--no-interaction`. `db:convert-filecache-bigint` wartete sonst auf eine Bestätigung.
+- Die Update-Vorprüfung zählt ein Datenverzeichnis unter dem Programmordner nicht mehr mit.
+- Hintergrundjobs: Modus und letzter Lauf kommen aus `occ config:list core`.
+- Die Liste der geladenen CLI-INI-Dateien ist vollständig (zuvor nur die ersten beiden).
+
+**Sicherheit**
+- CSRF-Token auf allen Formularen, Cookies `SameSite=Strict` + `HttpOnly` (+ `Secure` hinter Proxy), 2 h Leerlauf-Timeout.
+- Login-Sperre nach 5 Fehlversuchen für 15 Minuten pro IP. Fehlversuche landen im Journal.
+- Security-Header (CSP ohne Inline-Skripte, `X-Frame-Options`, `nosniff`, `no-referrer`).
+- Automatisches HTML-Escaping durch Jinja2-Templates.
+- Backups in `/var/backups/nc-manager` nur für root lesbar (`700`/`600`).
+- Werte aus config.php (beschreibbar für den Webserver-Benutzer) gelten als nicht vertrauenswürdig: Das
+  Datenverzeichnis wird gegen den bei der Installation festgehaltenen Pfad geprüft, Datenbank-Angaben auf
+  Steuerzeichen und Options-Einschleusung (seit 0.6.4).
+- Der Installer schlägt localhost als Standard vor, fragt das Passwort doppelt ab (min. 12 Zeichen)
+  und übergibt es per stdin statt als Prozess-Argument.
+
+**Betrieb**
+- Das Protokoll enthält nur noch ausgeführte Aktionen und behält die letzten 500 Einträge.
+- Das Dashboard braucht 2 statt 8 occ-Aufrufe (`status --output=json`) und zeigt zusätzlich memcache.local/locking.
+- `systemctl restart nc-manager` bricht ein laufendes Update nicht mehr ab (`KillMode=process`).
+- `uninstall.sh` entfernt jetzt auch `/opt/nc-manager`. Mit `--purge` werden zusätzlich Konfiguration, Protokoll und Benutzer entfernt.
 
 ## Aufbau
 
 | Datei | Aufgabe |
 |---|---|
-| `app.py` | Flask-Web-App (läuft als `ncmanager` unter Gunicorn) |
-| `jobs.py` | Hintergrund-Jobs, Sperre und Protokoll (SQLite) |
-| `templates/`, `static/` | HTML-Vorlagen, CSS, JavaScript |
-| `nc-manager-cmd` | Root-Wrapper – der einzige per sudo erlaubte Befehl |
-| `ncm_helper.py` | Helfer des Wrappers (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose) |
-| `install.sh`, `uninstall.sh` | Installation, Upgrade, Entfernen |
-| `tests/` | Tests für Web-App und Wrapper |
-
-## Entwicklung und Tests
-
-```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt pytest
-python3 -m pytest tests/        # Wrapper-Tests nur als root mit PHP; MariaDB-Tests, wenn ein Server läuft
-shellcheck nc-manager-cmd install.sh uninstall.sh
-```
-
-Rückmeldungen, Fehlerberichte und Ideen gerne als [Issue](../../issues) – am besten mit Distribution,
-Nextcloud-Version, Webserver, Datenbank und der Ausgabe aus dem Protokoll.
-
-## Entstehung
-
-Das Projekt wurde mit Unterstützung von KI-Werkzeugen entwickelt. Der vollständige Quellcode liegt in diesem
-Repository und kann vor der Installation geprüft werden. Der Code ist mit automatisierten Tests abgedeckt
-(Web-App, Wrapper, MariaDB und SQLite); Erfahrungen auf anderen Systemen fehlen noch – deshalb Testversion.
+| `app.py` | Flask-Web-App (läuft als `ncmanager`) |
+| `jobs.py` | Datenbank und Hintergrund-Jobs |
+| `templates/`, `static/` | HTML-Vorlagen, CSS, JS |
+| `nc-manager-cmd` | einziger per sudo erlaubter Befehl, Whitelist aller Aktionen |
+| `ncm_helper.py` | Auswertungen für den Wrapper (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose); root-eigen unter `/usr/local/lib/nc-manager` |
+| `tests/` | `python3 -m pytest tests/` – Web-App mit simuliertem Wrapper; echter Wrapper als root (mit MariaDB-Tests, wenn ein Server läuft) |
 
 ## Lizenz
 
-Copyright (c) 2026 roswitina@hotmail.com – veröffentlicht unter der [MIT-Lizenz](LICENSE.md).
-Ergänzend gilt der [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md); rechtlich maßgeblich ist der englische Lizenztext.
+Copyright (c) 2026 roswitina@hotmail.com. Veröffentlicht unter der MIT-Lizenz, Volltext in [LICENSE](LICENSE).
+Ergänzend gilt der [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md). Rechtlich maßgeblich ist
+der englische Lizenztext.
 
-Verwendete Python-Pakete (werden bei der Installation aus PyPI geladen): Flask, Werkzeug, Jinja2, MarkupSafe,
-itsdangerous, click (BSD-3-Clause), gunicorn, blinker (MIT).
+### Verwendete Software Dritter
 
-*Nextcloud ist eine Marke der Nextcloud GmbH. Dieses Projekt ist kein offizielles Nextcloud-Produkt und steht in keiner Verbindung zur Nextcloud GmbH.*
+Diese Pakete werden bei der Installation aus PyPI geladen und sind nicht Teil dieses Archivs:
+
+| Paket | Lizenz |
+| --- | --- |
+| Flask | BSD-3-Clause |
+| Werkzeug | BSD-3-Clause |
+| Jinja2 | BSD-3-Clause |
+| MarkupSafe | BSD-3-Clause |
+| itsdangerous | BSD-3-Clause |
+| click | BSD-3-Clause |
+| blinker | MIT |
+| gunicorn | MIT |

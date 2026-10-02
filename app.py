@@ -2,7 +2,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Nextcloud Server Manager – Web-Oberfläche."""
 import json
 import os
@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 import jobs
 
-VERSION = '0.6.3'
+VERSION = '0.6.4'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -692,6 +692,8 @@ def restore_plan(name):
             problems.append(f"Das Backup gehört zu {info.get('nc_path')}, nicht zu {plan.get('nc_path')}.")
         if info.get('datadir') and info['datadir'].rstrip('/') != plan.get('datadir'):
             problems.append(f"Datenverzeichnis im Backup ({info['datadir']}) weicht vom aktuellen ({plan.get('datadir')}) ab.")
+        if plan.get('datadir_problem'):
+            problems.append(plan['datadir_problem'])
         if as_bool(plan.get('datadir_inside')):
             problems.append('Das Datenverzeichnis liegt im Programmordner – automatischer Restore nicht möglich '
                             '(Anleitung: WIEDERHERSTELLEN.txt im Backup).')
@@ -1001,7 +1003,7 @@ def license_page():
                 return f.read()
         except OSError:
             return f'{name} nicht gefunden.'
-    return render_template('license.html', license_text=read('LICENSE.md'),
+    return render_template('license.html', license_text=read('LICENSE'),
                            disclaimer=_simple_markdown(read('HAFTUNGSAUSSCHLUSS.md')))
 
 

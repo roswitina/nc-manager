@@ -1,7 +1,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Tests der Web-App mit simuliertem Wrapper:  python3 -m pytest tests/"""
 import importlib
 import os
@@ -376,6 +376,23 @@ def test_restore_plan_ok_and_blocked(client):
     assert client.get('/backups/20991231-000000/restore').status_code == 404
 
 
+def test_restore_plan_blocked_by_untrusted_datadir(client, monkeypatch):   # 0.6.4
+    import app as appmod
+    orig = appmod.call_json_args
+
+    def fake(action, *args):
+        data, err = orig(action, *args)
+        if action == 'restore_plan':
+            data = dict(data, datadir='/etc', datadir_problem='Datenverzeichnis in config.php (/etc) weicht vom '
+                                                             'bei der Installation festgehaltenen (/srv/data) ab.')
+        return data, err
+    monkeypatch.setattr(appmod, 'call_json_args', fake)
+    login(client)
+    html = client.get('/backups/20261002-120000/restore').get_data(as_text=True)
+    assert 'weicht vom bei der Installation festgehaltenen' in html
+    assert ' disabled>Wiederherstellung starten' in html
+
+
 def test_restore_needs_typed_confirmation(client):
     login(client)
     t = csrf(client, '/backups/20261002-120000/restore')
@@ -429,7 +446,7 @@ def test_source_files_carry_license_header():
               'static/app.js', 'static/style.css', 'templates/base.html'):
         head = open(os.path.join(root, f), encoding='utf-8').read(600)
         assert 'roswitina@hotmail.com' in head and 'SPDX-License-Identifier: MIT' in head, f
-    assert 'MIT License' in open(os.path.join(root, 'LICENSE.md')).read()
+    assert 'MIT License' in open(os.path.join(root, 'LICENSE')).read()
 
 
 # ------------------------------------------------------------------ v0.6.3: Log archivieren, Rotation, „nur neue“

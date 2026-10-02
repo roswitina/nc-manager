@@ -1,7 +1,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Tests des echten Wrappers gegen eine simulierte Nextcloud.
 Laufen nur als root mit PHP-CLI, runuser und Benutzer www-data (sonst übersprungen).
 Die MariaDB-Tests laufen zusätzlich nur, wenn ein lokaler MariaDB-Server per Socket erreichbar ist."""
@@ -74,6 +74,7 @@ def make_sim(dbtype='sqlite3'):
         'false' if v is False else ("array('host'=>'localhost','port'=>6379,'password'=>'REDIS-GEHEIM')" if k == 'redis'
                                     else "'" + str(v).replace("'", "\\'") + "'")) for k, v in cfg.items()) + ')'
     open(os.path.join(nc, 'config', 'config.php'), 'w').write(f'<?php\n$CONFIG = {php_cfg};\n')
+    open(os.path.join(data, '.ocdata'), 'w').close()
     for i in range(20):
         open(os.path.join(data, 'admin', 'files', f'f{i}'), 'wb').write(os.urandom(2000))
     with open(os.path.join(nc, '.user.ini'), 'w') as f:
@@ -85,7 +86,7 @@ def make_sim(dbtype='sqlite3'):
     envf = os.path.join(d, 'env')
     with open(envf, 'w') as f:
         f.write(f"NCM_BACKEND=occ\nNCM_PHP={shutil.which('php')}\nNCM_NC_PATH={nc}\nNCM_WEBUSER=www-data\n"
-                f"NCM_BACKUP_DIR={bk}\nNCM_BACKUP_KEEP=10\n")
+                f"NCM_BACKUP_DIR={bk}\nNCM_BACKUP_KEEP=10\nNCM_DATADIR={data}\n")
     env = dict(os.environ, NCM_ENV_FILE=envf, NCM_LOCK=os.path.join(d, 'lock'),
                NCM_HELPER=os.path.join(ROOT, 'ncm_helper.py'), NCM_HOOKS_DIR=os.path.join(d, 'hooks'))
     env.pop('SUDO_USER', None)
@@ -358,3 +359,110 @@ def test_log_settings_validated(sim):
     assert run(sim, 'log_level_set', '7').returncode == 65
     r = run(sim, 'log_rotate_set', '52428800')
     assert r.returncode == 0 and '50 MiB' in r.stdout
+
+
+# ------------------------------------------------------------------ v0.6.4: Werte aus config.php nicht blind vertrauen
+
+def set_config(s, **kv):
+    """Ändert Werte in config.php wie es ein Angreifer mit Rechten des Webserver-Benutzers könnte."""
+    import re
+    cfg = os.path.join(s['nc'], 'config', 'config.php')
+    src = open(cfg).read()
+    for k, v in kv.items():
+        src = re.sub(rf", '{re.escape(k)}' => '[^']*'|'{re.escape(k)}' => '[^']*', ", '', src)
+        src = src.replace("'maintenance' => false", f"'maintenance' => false, '{k}' => '{v}'")
+    open(cfg, 'w').write(src)
+
+
+def _victim(s):
+    v = os.path.join(s['dir'], 'opfer')
+    os.makedirs(os.path.join(v, 'sub'))
+    open(os.path.join(v, 'sub', 'datei'), 'w').write('root\n')
+    return v
+
+
+def _owned_by_root(path):
+    return all(os.stat(os.path.join(dp, n)).st_uid == 0
+               for dp, dns, fns in os.walk(path) for n in dns + fns + ['.'])
+
+
+def test_restore_refuses_manipulated_datadir(sim):
+    assert run(sim, 'backup_full').returncode == 0
+    b = latest_backup(sim)
+    victim = _victim(sim)
+    set_config(sim, datadirectory=victim)          # Datenverzeichnis nachträglich umgebogen
+    r = run(sim, 'restore_backup', b)
+    assert r.returncode == 67 and 'weicht vom bei der Installation festgehaltenen' in r.stdout, r.stdout
+    assert 'nichts verändert' in r.stdout
+    assert _owned_by_root(victim) and os.path.isdir(sim['data'])
+    assert not maintenance(sim)
+
+
+def test_backup_refuses_manipulated_datadir(sim):
+    set_config(sim, datadirectory='/etc')
+    for action in ('backup', 'backup_full'):
+        r = run(sim, action)
+        assert r.returncode == 38 and 'weicht vom' in r.stdout, r.stdout
+    assert not [n for n in os.listdir(sim['bk']) if n[:2] == '20']
+    assert not maintenance(sim)
+
+
+def test_restore_plan_reports_datadir_problem(sim):
+    run(sim, 'backup')
+    b = latest_backup(sim)
+    assert json.loads(run(sim, 'restore_plan', b).stdout)['datadir_problem'] == ''
+    set_config(sim, datadirectory='/etc')
+    assert 'weicht vom' in json.loads(run(sim, 'restore_plan', b).stdout)['datadir_problem']
+
+
+def test_datadir_checks_even_if_env_matches(sim):
+    def env_datadir(v):
+        envf = sim['env']['NCM_ENV_FILE']
+        lines = [ln for ln in open(envf).read().splitlines() if not ln.startswith('NCM_DATADIR=')]
+        open(envf, 'w').write('\n'.join(lines + ([f'NCM_DATADIR={v}'] if v is not None else [])) + '\n')
+
+    env_datadir(None)                                       # Installation vor 0.6.4
+    r = run(sim, 'backup')
+    assert r.returncode == 38 and 'install.sh erneut' in r.stdout
+    env_datadir(sim['data'])
+    os.unlink(os.path.join(sim['data'], '.ocdata'))         # kein Nextcloud-Datenverzeichnis
+    r = run(sim, 'backup')
+    assert r.returncode == 38 and '.ocdata' in r.stdout
+    open(os.path.join(sim['data'], '.ocdata'), 'w').close()
+    os.chown(sim['data'], 0, 0)                             # gehört nicht dem Webserver-Benutzer
+    r = run(sim, 'backup')
+    assert r.returncode == 38 and 'gehört root' in r.stdout
+    for bad in ('/etc', '/usr/lib/x', '/'):
+        set_config(sim, datadirectory=bad)
+        env_datadir(bad)
+        r = run(sim, 'backup')
+        assert r.returncode == 38 and ('Systemverzeichnis' in r.stdout or 'nicht gesetzt' in r.stdout), (bad, r.stdout)
+
+
+def _helper(action, conf, *args):
+    return subprocess.run(['python3', os.path.join(ROOT, 'ncm_helper.py'), action, *args],
+                          input=json.dumps(conf), capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('bad', [
+    {'dbtype': 'mysql', 'dbname': 'nc', 'dbpassword': 'x"\n[mysqldump]\nresult-file=/etc/cron.d/x'},
+    {'dbtype': 'mysql', 'dbname': 'nc', 'dbhost': 'localhost\nresult-file=/etc/x'},
+    {'dbtype': 'mysql', 'dbname': 'nc', 'dbport': '3306\nresult-file=/etc/x'},
+    {'dbtype': 'mysql', 'dbname': '--result-file=/etc/x'},
+    {'dbtype': 'pgsql', 'dbname': 'nc', 'dbuser': '-x'},
+    {'dbtype': 'sqlite3', 'dbname': '../../etc/passwd', 'datadirectory': '/srv/data'},
+    {'dbtype': 'sqlite3', 'dbname': 'owncloud', 'datadirectory': ''},
+])
+def test_helper_rejects_injected_db_settings(bad, tmp_path):
+    target = str(tmp_path / 'database.sql.gz')
+    why = ('config.php', 'SQLite')                 # abgelehnt wegen der Prüfung, nicht wegen fehlender Werkzeuge
+    r = _helper('db_dump', bad, target)
+    assert r.returncode != 0 and any(w in r.stderr for w in why), r.stderr
+    assert not os.listdir(tmp_path)
+    src = tmp_path / 'x.sql.gz'
+    with gzip.open(src, 'wb') as f:
+        f.write(b'SELECT 1;')
+    r = _helper('db_restore', bad, str(src), 'www-data')
+    assert r.returncode != 0 and any(w in r.stderr for w in why), r.stderr
+    info = json.loads(_helper('db_info', bad).stdout)
+    assert info['ok'] is False and any(w in info['error'] for w in why), info

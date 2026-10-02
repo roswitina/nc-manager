@@ -2,7 +2,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # Entfernt den Nextcloud Server Manager.
 #   ./uninstall.sh          Programm, Dienst, sudo-Regel und Wrapper entfernen
 #   ./uninstall.sh --purge  zusätzlich Konfiguration, Protokoll und Systembenutzer entfernen

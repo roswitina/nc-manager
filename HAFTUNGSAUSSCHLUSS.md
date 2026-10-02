@@ -1,9 +1,9 @@
 # Gewährleistungs- und Haftungsausschluss
 
-**Nextcloud Server Manager** · Urheber: roswitina@hotmail.com · Lizenz: MIT (siehe `LICENSE.md`)
+**Nextcloud Server Manager** · Urheber: roswitina@hotmail.com · Lizenz: MIT (siehe `LICENSE`)
 
 Dieser Text ergänzt die MIT-Lizenz und erläutert sie auf Deutsch. Rechtlich maßgeblich ist der englische
-Lizenztext in `LICENSE.md`; bei Abweichungen gilt dieser. Mit der Installation oder Nutzung der Software
+Lizenztext in `LICENSE`; bei Abweichungen gilt dieser. Mit der Installation oder Nutzung der Software
 erklärst du dich mit den folgenden Bedingungen einverstanden.
 
 ## 1. Bereitstellung ohne Gewährleistung
@@ -98,7 +98,7 @@ die übrigen Bestimmungen wirksam.
 ## Disclaimer (English summary)
 
 This software is provided free of charge and **"as is"**, without warranty of any kind, express or implied,
-as stated in the MIT License (`LICENSE.md`), which is the legally binding text. It performs actions with **root
+as stated in the MIT License (`LICENSE`), which is the legally binding text. It performs actions with **root
 privileges** (updates, database restore, deletion of backups, trash and versions, PHP configuration) that can
 irreversibly alter systems or destroy data. Use it entirely at your own risk; always keep a current,
 independent backup or snapshot and test on a non-production instance first. To the extent permitted by law,

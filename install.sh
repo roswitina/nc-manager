@@ -2,16 +2,16 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # Installer / Upgrade für den Nextcloud Server Manager.
 set -euo pipefail
-VERSION=0.6.3
+VERSION=0.6.4
 SRC="$(cd "$(dirname "$0")" && pwd)"
 [ "$EUID" -eq 0 ] || { echo 'Bitte als root/sudo starten.'; exit 1; }
 echo "=== Nextcloud Server Manager $VERSION Installer ==="
 cat <<'TXT'
 
-Urheber: roswitina@hotmail.com · Lizenz: MIT (siehe LICENSE.md)
+Urheber: roswitina@hotmail.com · Lizenz: MIT (siehe LICENSE)
 
 WICHTIG – GEWÄHRLEISTUNGS- UND HAFTUNGSAUSSCHLUSS (Details: HAFTUNGSAUSSCHLUSS.md)
 Diese Software wird unentgeltlich und "wie besehen" ohne jede Gewährleistung bereitgestellt.
@@ -54,6 +54,7 @@ getenv() { [ -r "$ENVF" ] && sed -n "s/^$1=//p" "$ENVF" | head -n1 || true; }
 OLD_USER=$(getenv NCM_USER); OLD_USER=${OLD_USER:-admin}
 OLD_HASH=$(getenv NCM_PASSWORD_HASH); OLD_SECRET=$(getenv NCM_SECRET); OLD_PROXY=$(getenv NCM_BEHIND_PROXY)
 OLD_BKDIR=$(getenv NCM_BACKUP_DIR); OLD_KEEP=$(getenv NCM_BACKUP_KEEP)
+OLD_DATADIR=$(getenv NCM_DATADIR)
 OLD_BIND=''; OLD_PORT=''
 if [ -r "$SERVICE" ]; then
   b=$(sed -n 's/.*--bind \([^ ]*\).*/\1/p' "$SERVICE" | head -n1)
@@ -82,6 +83,31 @@ read -rp "Backup-Verzeichnis [${OLD_BKDIR:-/var/backups/nc-manager}]: " BKDIR; B
 [[ "$BKDIR" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo 'Ungültiger Pfad (nur Buchstaben, Ziffern, . _ - /).'; exit 1; }
 read -rp "Anzahl aufzubewahrender Backups [${OLD_KEEP:-3}]: " KEEP_N; KEEP_N=${KEEP_N:-${OLD_KEEP:-3}}
 [[ "$KEEP_N" =~ ^[0-9]{1,3}$ ]] && [ "$KEEP_N" -ge 1 ] || { echo 'Ungültige Anzahl.'; exit 1; }
+
+# Datenverzeichnis festhalten: Der root-Wrapper vertraut später nur diesem Wert, nicht config.php
+# (die kann der Webserver-Benutzer ändern). Ausgelesen als Webserver-Benutzer, wie Nextcloud selbst.
+CUR_DATADIR=$(runuser -u "$WEBUSER" -- "$PHP" -r '
+$d = $argv[1]; $c = [];
+foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as $f) {
+  $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
+}
+echo $c["datadirectory"] ?? "";' -- "$NC_PATH/config" 2>/dev/null || true)
+CUR_DATADIR=${CUR_DATADIR%/}
+DATADIR=$CUR_DATADIR
+if [ -n "$OLD_DATADIR" ] && [ "$OLD_DATADIR" != "$CUR_DATADIR" ]; then
+  echo
+  echo 'ACHTUNG: Das Datenverzeichnis in config.php hat sich seit der letzten Installation geändert:'
+  echo "  bisher festgehalten: $OLD_DATADIR"
+  echo "  jetzt in config.php: ${CUR_DATADIR:-(nicht gesetzt)}"
+  echo 'Nur übernehmen, wenn du es selbst verschoben hast – sonst wurde config.php möglicherweise manipuliert.'
+  read -rp 'Neuen Pfad aus config.php übernehmen? [j/N]: ' TAKE
+  [[ "${TAKE:-}" =~ ^[JjYy]$ ]] || DATADIR=$OLD_DATADIR
+fi
+[ -n "$DATADIR" ] || read -rp 'Nextcloud-Datenverzeichnis (datadirectory): ' DATADIR
+DATADIR=${DATADIR%/}
+[[ "$DATADIR" =~ ^/[A-Za-z0-9._/@+-]+$ ]] && [[ ! "$DATADIR/" =~ /\.\.?/ ]] || { echo "Ungültiges Datenverzeichnis: $DATADIR"; exit 1; }
+[ -d "$DATADIR" ] && [ -e "$DATADIR/.ocdata" ] || echo "WARNUNG: $DATADIR fehlt oder enthält keine .ocdata – Backups und Wiederherstellung werden abgelehnt, bis das stimmt."
+echo "✓ Datenverzeichnis: $DATADIR"
 
 HASH=''; PASS=''
 if [ -n "$OLD_HASH" ]; then read -rp 'Bestehendes Passwort beibehalten? [J/n]: ' KEEP; KEEP=${KEEP:-J}; else KEEP=n; fi
@@ -112,13 +138,12 @@ find "$BKDIR" -type f -exec chmod 600 {} + 2>/dev/null || true
 
 # Programmdateien ersetzen (venv bleibt erhalten).
 rm -rf /opt/nc-manager/templates /opt/nc-manager/static /opt/nc-manager/__pycache__
-cp "$SRC/app.py" "$SRC/jobs.py" "$SRC/requirements.txt" "$SRC/LICENSE.md" "$SRC/HAFTUNGSAUSSCHLUSS.md" /opt/nc-manager/
+cp "$SRC/app.py" "$SRC/jobs.py" "$SRC/requirements.txt" "$SRC/LICENSE" "$SRC/HAFTUNGSAUSSCHLUSS.md" /opt/nc-manager/
 cp -r "$SRC/templates" "$SRC/static" /opt/nc-manager/
 install -m 0755 -o root -g root "$SRC/nc-manager-cmd" /usr/local/sbin/nc-manager-cmd
 # Der Helfer läuft als root – er muss root gehören und darf für ncmanager nicht beschreibbar sein.
 install -m 0644 -o root -g root "$SRC/ncm_helper.py" /usr/local/lib/nc-manager/ncm_helper.py
-install -m 0644 -o root -g root "$SRC/LICENSE.md" /usr/local/lib/nc-manager/LICENSE.md
-rm -f /opt/nc-manager/LICENSE /usr/local/lib/nc-manager/LICENSE   # alter Dateiname aus früheren Versionen
+install -m 0644 -o root -g root "$SRC/LICENSE" /usr/local/lib/nc-manager/LICENSE
 chmod 755 /usr/local/lib/nc-manager
 
 # Werkzeuge für den Datenbank-Dump
@@ -154,6 +179,7 @@ NCM_NC_PATH=$NC_PATH
 NCM_WEBUSER=$WEBUSER
 NCM_BACKUP_DIR=$BKDIR
 NCM_BACKUP_KEEP=$KEEP_N
+NCM_DATADIR=$DATADIR
 EOF
 chmod 600 "$ENVF"
 umask 022

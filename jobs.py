@@ -2,7 +2,7 @@
 # Nextcloud Server Manager
 # Copyright (c) 2026 roswitina@hotmail.com
 # SPDX-License-Identifier: MIT
-# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Gemeinsame Konfiguration, Datenbank und Hintergrund-Jobs.
 
 Lange Aktionen (Update, Repair, BigInt …) laufen nicht im Gunicorn-Worker,
