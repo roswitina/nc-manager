@@ -2,7 +2,7 @@
 
 Stand: 2. Oktober 2026 · Die PDF-Fassung liegt jedem Release bei.
 
-Der Nextcloud Server Manager (Version 0.6.3) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – ohne sich für Routinearbeiten per SSH anmelden zu müssen.
+Der Nextcloud Server Manager (Version 0.6.3) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
 
 > **Urheber:** roswitina@hotmail.com · **Lizenz:** MIT · Unentgeltlich und ohne jede Gewährleistung bereitgestellt; die Nutzung erfolgt auf eigenes Risiko. Einzelheiten im Abschnitt „Lizenz und Haftungsausschluss“.
 
