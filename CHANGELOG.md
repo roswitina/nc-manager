@@ -2,6 +2,30 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.6.4
+
+**Sicherheit:** config.php gehört dem Webserver-Benutzer. Wer Nextcloud kompromittiert (z. B. über eine Lücke in einer App),
+kann sie ändern. Werte daraus werden jetzt nicht mehr ungeprüft verwendet, wenn der Wrapper als root arbeitet.
+
+- **Datenverzeichnis:** Der Installer liest `datadirectory` aus und hält es in `/etc/nc-manager.env` fest
+  (`NCM_DATADIR`, nur für root lesbar). Backup und Wiederherstellung verwenden das Datenverzeichnis nur, wenn
+  config.php damit übereinstimmt, der Ordner existiert, kein symbolischer Link und kein Systemverzeichnis ist,
+  dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält. Sonst bricht die Aktion ab,
+  ohne etwas zu verändern (Exit-Code 38 bei Backups, 67 bei der Wiederherstellung). Vorher hätte ein
+  manipulierter Pfad (z. B. `/etc`) bei einer Wiederherstellung mit Benutzerdaten von root verschoben und
+  per `chown -R` dem Webserver-Benutzer übereignet werden können.
+- **Datenbank-Zugangsdaten:** Host, Port, Name, Benutzer und Passwort werden vor der Verwendung geprüft.
+  Abgelehnt werden Steuerzeichen (z. B. Zeilenumbrüche, mit denen sich zusätzliche Optionen wie `result-file=`
+  in die MySQL-Optionsdatei schreiben ließen), Werte mit führendem `-`, nicht-numerische Ports und
+  SQLite-Datenbanknamen mit `/` oder `..`.
+- Die Seite „Wiederherstellen“ zeigt den Grund an, wenn das Datenverzeichnis nicht vertrauenswürdig ist.
+- Installer: Hat sich das Datenverzeichnis seit der letzten Installation geändert, zeigt er alten und neuen Pfad
+  und übernimmt den neuen nur nach Bestätigung.
+- 12 neue Tests (Wrapper und Helfer), insgesamt 73.
+
+**Upgrade:** `sudo ./install.sh` ausführen, das Datenverzeichnis wird dabei festgehalten. Bis dahin lehnen Backup
+und Wiederherstellung mit dem Hinweis ab, install.sh auszuführen.
+
 ## 0.6.3
 
 - **GitHub-tauglich:** Neue README, Dokumentation als Markdown in `docs/DOKUMENTATION.md`, Änderungsliste in `CHANGELOG.md`, Lizenztext als `LICENSE.md` (Inhalt unverändert MIT).
