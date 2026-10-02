@@ -1,0 +1,15 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% block body %}
+<div class="card"><h2>Aktivitätsprotokoll</h2>
+  <p class="muted">Nur ausgeführte Aktionen; die letzten 500 werden aufbewahrt.</p>
+  {% for r in rows %}
+  <div class="entry">
+    <b>{{ r.ts|dt }}</b> · <a href="{{ url_for('job_view', jid=r.id) }}">{{ r.action|label }}</a>
+    {% if r.status == 'running' %}· <span class="pillrun">läuft</span>
+    {% else %}· <span class="{{ 'ok' if r.rc == 0 else 'bad' }}">Exit {{ r.rc }}</span> · {{ '%.2f'|format(r.duration or 0) }} s
+    <details><summary>Ausgabe</summary><pre>{{ r.output }}</pre></details>{% endif %}
+  </div>
+  {% else %}<p class="muted">Noch keine Einträge.</p>{% endfor %}
+</div>
+{% endblock %}

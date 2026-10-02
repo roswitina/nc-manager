@@ -1,0 +1,29 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf %}
+{% block body %}
+<div class="card">
+  <div class="top"><h2>Nextcloud-Prüfungen</h2>
+    <form method="post" action="{{ url_for('checks_refresh') }}">{{ csrf() }}<button>Neu prüfen</button></form></div>
+  <p class="muted">Ergebnis von <code>occ setupchecks</code> – dieselben Hinweise wie in der Nextcloud-Verwaltungsübersicht. Geprüft {{ ts|ago }}.</p>
+  {% if data.error %}
+    <p class="bad">{{ data.error }}</p>
+  {% else %}
+    <div class="counts">
+      {% for sev, label in [('error','Fehler'),('warning','Warnungen'),('info','Hinweise'),('success','OK')] %}
+      <span class="sev sev-{{ sev }}">{{ summary.get(sev, 0) }} {{ label }}</span>{% endfor %}
+    </div>
+    {% for c in data.checks if c.severity != 'success' %}
+    <div class="log-entry">
+      <span class="sev sev-{{ c.severity }}">{{ {'error':'Fehler','warning':'Warnung','info':'Hinweis','success':'OK'}.get(c.severity, c.severity) }}</span> <b>{{ c.name }}</b> <span class="muted small">· {{ c.category }}</span>
+      {% if c.description %}<div>{{ c.description }}</div>{% endif %}
+      {% if c.link %}<div class="small"><a href="{{ c.link }}" target="_blank" rel="noopener noreferrer">Dokumentation ↗</a></div>{% endif %}
+    </div>
+    {% else %}<p class="ok">Keine Fehler, Warnungen oder Hinweise.</p>{% endfor %}
+    {% set ok = data.checks|selectattr('severity', 'equalto', 'success')|list %}
+    {% if ok %}<details><summary>{{ ok|length }} bestandene Prüfungen</summary>
+      {% for c in ok %}<div class="small">✓ {{ c.name }} <span class="muted">· {{ c.category }}</span></div>{% endfor %}
+    </details>{% endif %}
+  {% endif %}
+</div>
+{% endblock %}

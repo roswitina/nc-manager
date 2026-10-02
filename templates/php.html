@@ -1,0 +1,99 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, csrf %}
+{% block body %}
+<div class="card"><h2>PHP-Umgebung</h2>
+  {{ metric('Distribution', p.os_pretty) }}
+  {{ metric('Erkannt als', (p.platform or '–')|upper) }}
+  {{ metric('CLI / OCC', (p.cli_full or '–') ~ ' · ' ~ (p.cli_binary or '–')) }}
+  {{ metric('Web-SAPI', p.web_sapi) }}
+  {{ metric('PHP-FPM Dienst(e)', p.fpm_services or p.fpm_service or 'nicht erkannt') }}
+  {{ metric('Web php.ini', p.web_ini or 'nicht erkannt') }}
+</div>
+<div class="card"><h2>Effektive PHP-Werte: CLI/OCC ↔ Web/FPM</h2>
+  <p class="muted">≠ markiert unterschiedliche Werte. Für Webzugriffe ist FPM entscheidend; OCC/Cron verwenden CLI.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Einstellung</th><th>CLI / OCC</th><th>Web / FPM</th></tr></thead>
+    <tbody>{% for label, cv, fv, diff in rows %}<tr><td>{{ label }}</td><td>{{ cv }}</td><td>{{ fv }}{% if diff %} <span class="diff">≠</span>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+</div>
+<div class="card"><h2>Wo stehen die Werte?</h2>
+  <p class="muted">Fundstellen in den tatsächlich geladenen INI-Dateien, in Ladereihenfolge – je Bereich gilt die letzte.
+    Für Webanfragen kann zusätzlich .user.ini bzw. .htaccess gelten (siehe unten).</p>
+  {% for k, items in (v.sources or {}).items() if items %}
+  <details><summary>{{ k }} <span class="muted small">({{ items|length }} Fundstelle{{ 'n' if items|length > 1 }})</span></summary>
+    <table class="small">{% for x in items %}{% set last = (items|selectattr('sapi', 'equalto', x.sapi)|list)[-1] %}
+      <tr><td>{{ 'CLI' if x.sapi == 'cli' else 'FPM' }}</td><td class="mono">{{ x.file }}</td><td>{{ x.value }}</td>
+        <td>{% if x is sameas last %}<span class="ok">wirksam</span>{% else %}<span class="muted">überschrieben</span>{% endif %}</td></tr>{% endfor %}
+    </table></details>
+  {% else %}<p class="muted">Keine Fundstellen ermittelt.</p>{% endfor %}
+</div>
+<div class="card"><h2>Geladene PHP-Konfigurationen</h2>
+  <div class="dash">
+    <div><h3>CLI / OCC – Reihenfolge</h3>{% for f in v.cli_files or [] %}<div>• {{ f }}</div>{% else %}keine ermittelt{% endfor %}</div>
+    <div><h3>Web / FPM – Reihenfolge</h3>{% for f in v.fpm_files or [] %}<div>• {{ f }}</div>{% else %}keine ermittelt{% endfor %}</div>
+  </div>
+</div>
+<div class="card"><h2>Nextcloud-spezifische Dateien</h2>
+  {{ metric('DietPi', p.dietpi_files or 'keine DietPi-Datei') }}
+  {{ metric('Manager Overrides', p.manager_files or 'noch keine') }}
+  {% for label, path, vals, applies in [('.user.ini', overrides.user_ini_path, overrides.user_ini, 'gilt für PHP-FPM'), ('.htaccess (php_value)', overrides.htaccess_path, overrides.htaccess, 'gilt nur für Apache mit mod_php')] %}
+  <div class="metric"><div class="label">{{ label }} · {{ applies }}</div><div class="value">
+    {% if not path %}nicht vorhanden{% elif not vals %}{{ path }} – setzt keine PHP-Werte
+    {% else %}{{ path }}<div class="small mono">{% for k2, v2 in vals.items() %}{{ k2 }} = {{ v2 }}{{ ' · ' if not loop.last }}{% endfor %}</div>{% endif %}
+  </div></div>
+  {% endfor %}
+  <p class="muted small">Diese Dateien liefert Nextcloud mit und ersetzt sie bei Updates. Was dort steht, gilt für Webanfragen
+    vorrangig vor der PHP-Konfiguration (außer OPcache-Werten). Der Manager liest sie nur und ändert sie nicht.</p>
+</div>
+<div class="card" id="php-edit"><h2>PHP-Werte ändern</h2>
+  <p class="muted">„Aktuell“ ist der Wert, den Webanfragen tatsächlich bekommen – inklusive .user.ini bzw. .htaccess.
+    Zu jeder Empfehlung steht, worauf sie beruht.</p>
+  {% for w in warnings %}<p class="bad">⚠ {{ w }}</p>{% endfor %}
+  {% if low %}<p class="bad">⚠ {{ low|length }} Wert(e) weichen von der Empfehlung ab.</p>{% endif %}
+  <div class="scroll"><table>
+    <thead><tr><th>Einstellung</th><th>Aktuell (Web)</th><th>Empfehlung</th><th>Grundlage</th><th></th></tr></thead>
+    <tbody>
+    {% for k, c in current.items() %}
+      <tr>
+        <td>{{ k }}<div class="muted small">{{ c.hint }}</div></td>
+        <td>{{ c.web if c.web != '' else '–' }}
+          {% if c.state == 'ok' %} <span class="ok">✓</span>{% elif c.state == 'low' %} <span class="bad">⚠ zu niedrig</span>{% elif c.state == 'bad' %} <span class="bad">⚠ nicht empfohlen</span>{% endif %}
+          <div class="muted small">aus {{ c.origin }}{% if c.overridden and c.base and c.base != c.web %} (Konfiguration: {{ c.base }}){% endif %}</div>
+          {% if has_fpm and c.cli and c.cli != c.web and k != 'max_execution_time' %}<div class="muted small">CLI/occ: {{ c.cli }}</div>{% endif %}</td>
+        <td>{{ c.rec }}</td>
+        <td><span class="basis basis-{{ c.basis }}" title="{{ basis[c.basis][1] }}">{{ basis[c.basis][0] }}</span>
+          <div class="small"><a href="{{ c.source[1] }}" target="_blank" rel="noopener noreferrer">{{ c.source[0] }} ↗</a></div>
+          <div class="muted small">{{ c.note }}</div></td>
+        <td>{% if c.state in ('low', 'bad') and c.overridden %}<span class="muted small">in {{ c.origin }} festgelegt</span>
+          {% elif c.state in ('low', 'bad') %}
+          <form method="post" action="{{ url_for('php_set') }}" data-confirm="{{ k }} auf {{ c.rec }} setzen und PHP neu laden?">
+            {{ csrf() }}<input type="hidden" name="key" value="{{ k }}"><input type="hidden" name="value" value="{{ c.rec }}">
+            <button class="small-btn"{% if running %} disabled{% endif %}>Empfehlung setzen</button>
+          </form>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div class="legend small">
+    {% for key, (label, text) in basis.items() %}<div><span class="basis basis-{{ key }}">{{ label }}</span> {{ text }}</div>{% endfor %}
+  </div>
+
+  <h3>Eigenen Wert setzen</h3>
+  <form method="post" action="{{ url_for('php_set') }}">
+    {{ csrf() }}
+    <label for="key">Einstellung</label>
+    <select id="key" name="key">{% for k, c in current.items() %}
+      <option value="{{ k }}" data-current="{{ c.web }}" data-rec="{{ c.rec }}" data-hint="{{ c.hint }}" data-origin="{{ c.origin }}">{{ k }}</option>{% endfor %}
+    </select>
+    <label for="value">Wert</label>
+    {% set first = current.values()|first %}
+    <input id="value" name="value" value="{{ first.web if first.web != '' else first.rec }}" required maxlength="10">
+    <p class="muted small" id="value-info">Aktuell: {{ first.web or '–' }} (aus {{ first.origin }}) · Empfehlung: {{ first.rec }} · {{ first.hint }}</p>
+    <button{% if running %} disabled{% endif %}>Speichern & PHP neu laden</button>
+  </form>
+  <p class="muted small">Änderungen landen nur in 99-nextcloud-manager.ini (CLI und alle laufenden FPM-Versionen).
+    Vor dem Neuladen wird mit <code>php-fpm -t</code> geprüft; bei Fehlern wird zurückgerollt.
+    Steht ein Wert in .user.ini bzw. .htaccess, gilt für Webanfragen weiterhin dieser.</p>
+</div>
+{% endblock %}

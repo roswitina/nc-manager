@@ -1,0 +1,86 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, metric_html, pill %}
+{% block body %}
+<div class="card"><div class="top">
+  <div><div class="muted">NEXTCLOUD</div><h1>{{ st.versionstring or '–' }}</h1><div class="muted">{{ x.nc_path }}</div></div>
+  <div>{{ pill(not maint and not dbup, 'Betriebsbereit', 'Prüfen') }}</div>
+</div></div>
+<div class="dash">
+<div class="card"><h2>Betrieb</h2>
+  {% call metric_html('Nextcloud-Prüfungen') %}
+    {% if checks_summary %}
+      {% if checks_summary.error %}<span class="sev sev-error">{{ checks_summary.error }} Fehler</span>{% endif %}
+      {% if checks_summary.warning %}<span class="sev sev-warning">{{ checks_summary.warning }} Warnungen</span>{% endif %}
+      {% if not checks_summary.error and not checks_summary.warning %}<span class="sev sev-success">alles in Ordnung</span>{% endif %}
+      <span class="muted small">geprüft {{ checks_ts|ago }}</span>
+    {% elif checks_error %}<span class="muted">{{ checks_error }}</span>
+    {% else %}<a href="{{ url_for('checks_page') }}">jetzt prüfen</a>{% endif %}
+  {% endcall %}
+  {% call metric_html('App-Updates') %}
+    {% if apps and apps.updates is defined %}
+      {% if apps.updates %}<a href="{{ url_for('apps_page') }}"><span class="sev sev-warning">{{ apps.updates|length }} verfügbar</span></a>{% else %}<span class="sev sev-success">alle aktuell</span>{% endif %}
+      <span class="muted small">geprüft {{ apps_ts|ago }}</span>
+    {% else %}<a href="{{ url_for('apps_page') }}">jetzt prüfen</a>{% endif %}
+  {% endcall %}
+  {% call metric_html('Letztes Backup') %}
+    {% if last_backup %}{{ last_backup_ts|ago }} <span class="muted small">· Nextcloud {{ last_backup.info.version or '?' }} · {{ backup_count }} vorhanden</span>
+    {% else %}<span class="bad">keins</span> – <a href="{{ url_for('backups_page') }}">Backup erstellen</a>{% endif %}
+  {% endcall %}
+  {% if has_fpm %}{% call metric_html('PHP-FPM-Auslastung') %}
+    {% if fpm_hits %}<a href="{{ url_for('fpm_page') }}"><span class="sev sev-warning">Limit {{ fpm_hits }}× erreicht</span></a>{% else %}<span class="sev sev-success">Limit nie erreicht</span>{% endif %}
+  {% endcall %}{% endif %}
+</div>
+<div class="card"><h2>Nextcloud</h2>
+  {{ metric('Version', st.versionstring) }}
+  {% call metric_html('Wartungsmodus') %}{{ pill(not maint, 'Aus', 'Ein') }}{% endcall %}
+  {% call metric_html('DB-Upgrade') %}{{ pill(not dbup, 'Nicht erforderlich', 'Erforderlich') }}{% endcall %}
+  {{ metric('Installation', x.nc_path) }}
+  {{ metric('Datenverzeichnis', cfg.datadirectory) }}
+  {% call metric_html('CLI') %}{{ 'DietPi ncc → occ' if dietpi else x.backend }}<br><span class="muted">{{ x.occ_path }}</span>{% endcall %}
+</div>
+<div class="card"><h2>System</h2>
+  {{ metric('Betriebssystem', x.os) }}
+  {% call metric_html('DietPi') %}{{ pill(dietpi, 'Ja', 'Nein') }}{% endcall %}
+  {{ metric('Kernel', (x.kernel or '–') ~ ' · ' ~ (x.arch or '')) }}
+  {{ metric('Uptime', ((x.uptime or 0)|int // 86400) ~ ' Tage') }}
+  {{ metric('RAM', (mem_used|kb) ~ ' / ' ~ (mem_total|kb)) }}
+  {{ metric('Root-Dateisystem', x.root_df|df) }}
+</div>
+<div class="card"><h2>PHP / Plattform</h2>
+  {{ metric('Plattform', (px.platform or '–')|upper) }}
+  {{ metric('CLI / OCC PHP', px.cli_full or x.php_version) }}
+  {{ metric('CLI php.ini', px.cli_ini) }}
+  {{ metric('Web PHP SAPI', px.web_sapi) }}
+  {% call metric_html('PHP-FPM') %}{{ pill(px.fpm_service, px.fpm_service or 'Aktiv', 'Nicht erkannt') }}{% endcall %}
+  {{ metric('Web php.ini', px.web_ini) }}
+  {{ metric('FPM memory_limit', px.fpm_memory_limit) }}
+  {{ metric('FPM upload_max_filesize', px.fpm_upload_max) }}
+  {{ metric('DietPi Nextcloud INI', px.dietpi_files or 'nicht vorhanden') }}
+</div>
+<div class="card"><h2>Datenbank & Cache</h2>
+  {{ metric('DB-Typ', cfg.dbtype) }}
+  {{ metric('DB-Host', cfg.dbhost) }}
+  {{ metric('DB-Name', cfg.dbname) }}
+  {% call metric_html('MariaDB') %}{{ pill(x.mariadb == 'active') }}{% endcall %}
+  {% call metric_html('Redis') %}{{ pill(x.redis == 'active') }}{% endcall %}
+  {{ metric('memcache.local', cfg['memcache.local']) }}
+  {{ metric('memcache.locking', cfg['memcache.locking']) }}
+</div>
+<div class="card"><h2>Webserver & Jobs</h2>
+  {{ metric('Webserver', x.webserver) }}
+  {% call metric_html('Apache') %}{{ pill(x.apache == 'active') }}{% endcall %}
+  {% call metric_html('Nginx') %}{{ pill(x.nginx == 'active') }}{% endcall %}
+  {{ metric('Hintergrundjobs', cron_mode) }}
+  {{ metric('Letzter Lauf', lastcron|ago if lastcron else 'nie / unbekannt') }}
+</div>
+<div class="card"><h2>Storage</h2>
+  {{ metric('Datenpfad', cfg.datadirectory) }}
+  {{ metric('Dateisystem', x.data_df|df) }}
+</div>
+<div class="card"><h2>Gesundheitszustand</h2>
+  <div class="health">{% for name, ok in health %}<div class="{{ 'ok' if ok else 'bad' }}">{{ '✓' if ok else '⚠' }} {{ name }}</div>{% endfor %}</div>
+  <p class="muted">Passwörter, Secrets und Tokens werden nicht abgefragt oder angezeigt.</p>
+</div>
+</div>
+{% endblock %}

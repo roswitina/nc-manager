@@ -1,0 +1,34 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf %}
+{% block body %}
+<div class="card">
+  <div class="top"><h2>App-Updates</h2>
+    <form method="post" action="{{ url_for('apps_refresh') }}">{{ csrf() }}<button>Neu prüfen</button></form></div>
+  <p class="muted">Geprüft {{ ts|ago }} über den Nextcloud App Store.</p>
+  {% if data.error %}<p class="bad">Abfrage fehlgeschlagen:</p><pre>{{ data.error }}</pre>
+  {% elif not data.updates %}<p class="ok">Alle Apps sind aktuell.</p>
+  {% else %}
+    <div class="scroll"><table>
+      <thead><tr><th>App</th><th>Installiert</th><th>Neu</th><th></th></tr></thead>
+      <tbody>{% for u in data.updates %}
+        <tr><td>{{ u.id }}</td><td>{{ u.current }}</td><td>{{ u.new }}</td>
+          <td><form method="post" action="{{ url_for('apps_update') }}">{{ csrf() }}<input type="hidden" name="app" value="{{ u.id }}"><button class="small-btn"{% if running %} disabled{% endif %}>Aktualisieren</button></form></td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    <form method="post" action="{{ url_for('apps_update') }}" data-confirm="Alle {{ data.updates|length }} App-Updates installieren?">
+      {{ csrf() }}<input type="hidden" name="app" value="*"><p><button class="warn"{% if running %} disabled{% endif %}>Alle aktualisieren</button></p>
+    </form>
+  {% endif %}
+</div>
+{% if data.enabled is defined %}
+<div class="card"><h2>Installierte Apps</h2>
+  <details><summary>{{ data.enabled|length }} aktiviert · {{ data.disabled|length }} deaktiviert</summary>
+    <div class="dash">
+      <div><h3>Aktiviert</h3>{% for a, v in data.enabled|dictsort %}<div class="small">{{ a }} <span class="muted">{{ v }}</span></div>{% endfor %}</div>
+      <div><h3>Deaktiviert</h3>{% for a, v in data.disabled|dictsort %}<div class="small">{{ a }} <span class="muted">{{ v }}</span></div>{% else %}<div class="muted">keine</div>{% endfor %}</div>
+    </div>
+  </details>
+</div>
+{% endif %}
+{% endblock %}

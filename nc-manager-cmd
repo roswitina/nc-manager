@@ -1,0 +1,737 @@
+#!/bin/bash
+# Nextcloud Server Manager
+# Copyright (c) 2026 roswitina@hotmail.com
+# SPDX-License-Identifier: MIT
+# Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+# nc-manager-cmd – privilegierter Helfer des Nextcloud Server Managers.
+# Wird von der Web-App per sudo als root aufgerufen. Nur die Aktionen im
+# case-Block am Ende sind erlaubt; alle Argumente werden hier erneut geprüft.
+set -u
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ENV=/etc/nc-manager.env
+LOCK=/run/nc-manager.lock
+HELPER=/usr/local/lib/nc-manager/ncm_helper.py
+# Overrides nur bei direktem Aufruf (Tests), niemals über sudo.
+if [ -z "${SUDO_USER:-}" ]; then
+  ENV=${NCM_ENV_FILE:-$ENV}; LOCK=${NCM_LOCK:-$LOCK}; HELPER=${NCM_HELPER:-$HELPER}
+fi
+
+[ -r "$ENV" ] || { echo 'Konfiguration fehlt'; exit 90; }
+read_env() { sed -n "s/^$1=//p" "$ENV" | head -n1; }
+NCM_BACKEND="$(read_env NCM_BACKEND)"
+NCM_NCC="$(read_env NCM_NCC)"
+NCM_PHP="$(read_env NCM_PHP)"
+NCM_NC_PATH="$(read_env NCM_NC_PATH)"
+NCM_WEBUSER="$(read_env NCM_WEBUSER)"
+BACKUP_DIR="$(read_env NCM_BACKUP_DIR)"; BACKUP_DIR=${BACKUP_DIR:-/var/backups/nc-manager}
+BACKUP_KEEP="$(read_env NCM_BACKUP_KEEP)"; [[ "$BACKUP_KEEP" =~ ^[0-9]{1,3}$ ]] || BACKUP_KEEP=3
+helper() { python3 "$HELPER" "$@"; }
+[ -n "$NCM_PHP" ] && [ -n "$NCM_NC_PATH" ] && [ -n "$NCM_WEBUSER" ] || {
+  echo 'Technische Konfiguration unvollständig'; exit 91
+}
+ACTION="${1:-}"
+
+# ---------------------------------------------------------------- Hilfsfunktionen
+
+# occ immer nicht-interaktiv: sonst warten z.B. bigint oder upgrade auf eine Eingabe.
+runocc() {
+  if [ "$NCM_BACKEND" = ncc ] && [ -x "$NCM_NCC" ]; then
+    "$NCM_NCC" --no-interaction "$@"
+  else
+    runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" "$NCM_NC_PATH/occ" --no-interaction "$@"
+  fi
+}
+
+# Nur eine ändernde Aktion gleichzeitig (Update, Repair, PHP …).
+take_lock() {
+  exec 9>"$LOCK"
+  flock -n 9 || { echo 'Es läuft bereits eine andere Aktion des Managers. Bitte warten.'; exit 75; }
+}
+
+# json_out key value [key value …]
+#   key:json      value ist JSON-Text (nur für kleine Werte – Argumente sind auf 128 KB begrenzt)
+#   key:jsonfile  value ist eine Datei mit JSON-Inhalt (für große Werte wie Logs)
+json_out() {
+  python3 -c '
+import json, sys
+a = sys.argv[1:]; o = {}
+for k, v in zip(a[::2], a[1::2]):
+    if k.endswith(":jsonfile"):
+        k = k[:-9]
+        try:
+            with open(v, encoding="utf-8", errors="replace") as f:
+                v = f.read()
+        except OSError:
+            v = ""
+        kind = "json"
+    elif k.endswith(":json"):
+        k = k[:-5]; kind = "json"
+    else:
+        kind = "text"
+    if kind == "json":
+        try:
+            v = json.loads(v) if v.strip() else None
+        except ValueError:
+            v = None
+    o[k] = v
+print(json.dumps(o, ensure_ascii=False))' "$@"
+}
+
+# Temporäre Dateien des Wrappers, werden beim Beenden gelöscht.
+TMPFILES=()
+# Aufruf ohne Subshell (tmpfile name), sonst geht der Eintrag in TMPFILES verloren.
+tmpfile() { local _f; _f=$(mktemp); TMPFILES+=("$_f"); printf -v "$1" '%s' "$_f"; }
+
+# Ausgewählte, unkritische Werte aus config.php (+ *.config.php) – ausgeführt als Web-User.
+nc_config() {
+  runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" -r '
+$d = $argv[1]; $c = [];
+foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as $f) {
+  $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
+}
+$o = [];
+foreach (["datadirectory", "dbtype", "dbhost", "dbname", "memcache.local", "memcache.distributed", "memcache.locking", "logfile", "log_type", "loglevel", "log_rotate_size"] as $k) { $o[$k] = $c[$k] ?? null; }
+echo json_encode($o, JSON_UNESCAPED_SLASHES);' -- "$NCM_NC_PATH/config" 2>/dev/null
+}
+
+# DB-Zugangsdaten für den Dump. Nur intern verwenden und direkt per Pipe an den Helfer geben,
+# niemals ausgeben oder als Argument übergeben.
+nc_db_creds() {
+  runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" -r '
+$d = $argv[1]; $c = [];
+foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as $f) {
+  $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
+}
+$o = [];
+foreach (["dbtype", "dbhost", "dbport", "dbname", "dbuser", "dbpassword", "datadirectory"] as $k) { $o[$k] = $c[$k] ?? null; }
+echo json_encode($o);' -- "$NCM_NC_PATH/config" 2>/dev/null
+}
+
+# Redis-Konfiguration inkl. Passwort – nur per Pipe an den Helfer, nie ausgeben.
+nc_redis_creds() {
+  runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" -r '
+$d = $argv[1]; $c = [];
+foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as $f) {
+  $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
+}
+echo json_encode(["redis" => $c["redis"] ?? null]);' -- "$NCM_NC_PATH/config" 2>/dev/null
+}
+
+nc_logfile() {
+  local cfg lf
+  cfg=$(nc_config)
+  lf=$(printf '%s' "$cfg" | json_get logfile)
+  [ -n "$lf" ] || lf="$(printf '%s' "$cfg" | json_get datadirectory)/nextcloud.log"
+  printf '%s' "$lf"
+}
+
+# Vom Manager eingeschalteter Wartungsmodus wird beim Beenden wieder ausgeschaltet (z.B. nach einem
+# abgebrochenen Vollbackup). Beim Restore bleibt er bei Fehlern bewusst an (MAINT_KEEP=1).
+MAINT_BY_US=0; MAINT_KEEP=0
+maint_on() { runocc maintenance:mode --on >/dev/null && MAINT_BY_US=1; }
+maint_off() { if [ "$MAINT_BY_US" = 1 ]; then runocc maintenance:mode --off >/dev/null && MAINT_BY_US=0; fi; }
+cleanup() {
+  rm -f "${TMPFILES[@]}"
+  if [ "$MAINT_BY_US" = 1 ] && [ "$MAINT_KEEP" = 0 ]; then
+    runocc maintenance:mode --off >/dev/null 2>&1 && echo 'Wartungsmodus wieder ausgeschaltet.'
+  fi
+}
+trap cleanup EXIT
+
+# Hooks: nur ausführbare, root-eigene Dateien, die für Gruppe/Andere nicht beschreibbar sind
+# (sonst könnte jeder mit Schreibrecht Code als root ausführen lassen).
+HOOKS_DIR=/etc/nc-manager/hooks
+if [ -z "${SUDO_USER:-}" ]; then HOOKS_DIR=${NCM_HOOKS_DIR:-$HOOKS_DIR}; fi
+safe_root_path() {
+  local p="$1" own perm
+  own=$(stat -c %u "$p" 2>/dev/null) || return 1
+  perm=$(stat -c %a "$p")
+  [ "$own" = 0 ] && (( (8#$perm & 8#022) == 0 ))
+}
+run_hook() {   # run_hook name [VAR=wert ...]
+  local h="$HOOKS_DIR/$1"; shift
+  [ -e "$h" ] || return 0
+  if [ ! -f "$h" ] || [ ! -x "$h" ] || ! safe_root_path "$h" || ! safe_root_path "$HOOKS_DIR"; then
+    echo "FEHLER: Hook $h wird nicht ausgeführt – er muss eine ausführbare Datei von root sein und darf (wie sein Ordner) für Gruppe/Andere nicht beschreibbar sein."
+    return 2
+  fi
+  echo "--- Hook $(basename "$h")"
+  env NCM_NC_PATH="$NCM_NC_PATH" NCM_BACKUP_DIR="$BACKUP_DIR" "$@" "$h"
+}
+
+# Backup von Datenbank, Programmcode, config.php und optional Benutzerdaten.
+#   do_backup <mit_daten 0|1> <grund> <geschützter Name für prune>
+# Setzt BACKUP_NAME auf den Namen des neuen Backups.
+BACKUP_NAME=
+do_backup() {
+  local include_data="${1:-0}" reason="${2:-manuell}" protect="${3:-}"
+  local ts dir datadir parent base size dsize=0 free dbtype rc
+  ts=$(date +%Y%m%d-%H%M%S); dir="$BACKUP_DIR/$ts"
+  while [ -e "$dir" ]; do sleep 1; ts=$(date +%Y%m%d-%H%M%S); dir="$BACKUP_DIR/$ts"; done
+  mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+  datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
+  dbtype=$(nc_config | json_get dbtype)
+  size=$(du -sk ${datadir:+"--exclude=$datadir"} "$NCM_NC_PATH" | awk '{print $1}')
+  if [ "$include_data" = 1 ]; then
+    [ -n "$datadir" ] && [ -d "$datadir" ] || { echo "FEHLER: Datenverzeichnis $datadir nicht gefunden."; return 33; }
+    dsize=$(du -sk "$datadir" | awk '{print $1}')
+  fi
+  free=$(df -Pk "$BACKUP_DIR" | awk 'NR==2{print $4}')
+  echo "=== Backup nach $dir ($([ "$include_data" = 1 ] && echo 'mit' || echo 'ohne') Benutzerdaten) ==="
+  [ "$free" -gt "$((size + dsize + 1048576))" ] || {
+    echo "FEHLER: Zu wenig Platz in $BACKUP_DIR (frei: $((free / 1024)) MiB, benötigt: ca. $(( (size + dsize) / 1024 + 1024 )) MiB)."; return 30; }
+  mkdir -m 700 "$dir" || return 30
+  if [ "$include_data" = 1 ]; then
+    # Datenbank und Dateien müssen zum selben Zeitpunkt gehören.
+    echo 'Wartungsmodus ein (für ein konsistentes Vollbackup) ...'
+    maint_on || { echo 'FEHLER: Wartungsmodus konnte nicht eingeschaltet werden.'; rm -rf "$dir"; return 34; }
+  fi
+  echo 'Sichere Datenbank ...'
+  if ! nc_db_creds | helper db_dump "$dir/database.sql.gz"; then
+    echo 'FEHLER: Datenbank-Backup fehlgeschlagen.'; rm -rf "$dir"; maint_off; return 31
+  fi
+  echo 'Sichere Programmcode (ohne Datenverzeichnis) ...'
+  parent=$(dirname "$NCM_NC_PATH"); base=$(basename "$NCM_NC_PATH")
+  local excl=()
+  case "$datadir/" in "$NCM_NC_PATH"/*) excl=(--anchored "--exclude=$base${datadir#"$NCM_NC_PATH"}");; esac
+  if ! tar -C "$parent" "${excl[@]}" -czf "$dir/nextcloud-code.tar.gz" "$base"; then
+    echo 'FEHLER: Sichern des Programmcodes fehlgeschlagen.'; rm -rf "$dir"; maint_off; return 32
+  fi
+  if [ "$include_data" = 1 ]; then
+    echo "Sichere Benutzerdaten aus $datadir (kann lange dauern) ..."
+    tar -C "$(dirname "$datadir")" --warning=no-file-changed -czf "$dir/nextcloud-data.tar.gz" "$(basename "$datadir")"
+    rc=$?
+    # tar-Exit-Code 1 = einzelne Dateien haben sich beim Lesen geändert (z.B. nextcloud.log) – kein Abbruch.
+    if [ "$rc" -gt 1 ]; then echo 'FEHLER: Sichern der Benutzerdaten fehlgeschlagen.'; rm -rf "$dir"; maint_off; return 33; fi
+    [ "$rc" = 1 ] && echo 'HINWEIS: Einzelne Dateien haben sich während des Sicherns geändert.'
+    maint_off; echo 'Wartungsmodus aus.'
+  fi
+  cp -a "$NCM_NC_PATH/config/config.php" "$dir/config.php"
+  python3 -c 'import json,sys
+a = sys.argv
+json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.3"}, open(a[5], "w"))' \
+    "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
+    "$dbtype" "$include_data" "$reason"
+  if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
+  else local data_line="Benutzerdaten: NICHT enthalten ($datadir) – dafür ein externes Backup/Snapshot verwenden"; fi
+  cat >"$dir/WIEDERHERSTELLEN.txt" <<TXT
+Backup vom $ts – Nextcloud $NCM_NC_PATH
+Enthalten: Datenbank, Programmcode und config.php.
+$data_line
+
+Am einfachsten: In der Oberfläche unter Backups → "Wiederherstellen …" (prüft das Backup vorher,
+legt vorher ein Sicherheits-Backup des aktuellen Stands an und benennt Altes nur um).
+
+Von Hand (als root, Nextcloud vorher in den Wartungsmodus setzen):
+  1. Datenbank (der Wartungsmodus sperrt solange alle Zugriffe). Vorher ALLE Tabellen löschen bzw.
+     die Datenbank neu anlegen, sonst bleiben neuere Tabellen übrig und das nächste Upgrade scheitert:
+     MySQL/MariaDB: zcat database.sql.gz | mysql <dbname>
+     PostgreSQL:    zcat database.sql.gz | psql -v ON_ERROR_STOP=1 -U <dbuser> -d <dbname>
+     SQLite:        zcat database.sqlite.gz > <datadir>/<dbname>.db  (Besitzer: $NCM_WEBUSER)
+  2. Benutzerdaten (nur wenn enthalten): mv $datadir $datadir.alt && tar -C $(dirname "${datadir:-/x}") -xzf nextcloud-data.tar.gz
+  3. Programmcode: mv $NCM_NC_PATH $NCM_NC_PATH.alt && tar -C $parent -xzf nextcloud-code.tar.gz
+  4. chown -R $NCM_WEBUSER:$NCM_WEBUSER $NCM_NC_PATH ${datadir}
+  5. occ maintenance:data-fingerprint, Wartungsmodus aus.
+     Ohne Benutzerdaten im Backup danach: occ files:scan --all
+TXT
+  # Prüfsummen zuletzt: über alle Dateien des Backups
+  (cd "$dir" && sha256sum -- * > checksums.sha256) || { echo 'FEHLER: Prüfsummen konnten nicht erstellt werden.'; rm -rf "$dir"; return 35; }
+  chown -R root:root "$dir"; chmod 600 "$dir"/*
+  du -sh "$dir" | awk '{print "Backup fertig: " $2 " (" $1 ")"}'
+  BACKUP_NAME=$ts
+  helper backup_prune "$BACKUP_DIR" "$BACKUP_KEEP" "$protect"
+  run_hook post-backup NCM_BACKUP_PATH="$dir" || echo 'WARNUNG: post-backup-Hook fehlgeschlagen.'
+  return 0
+}
+
+# Wiederherstellung eines Manager-Backups. Reihenfolge so, dass Nextcloud erst wieder erreichbar ist,
+# wenn Datenbank, Daten und Code zusammenpassen; bei Fehlern bleibt der Wartungsmodus an.
+do_restore() {
+  local name="$1" d="$BACKUP_DIR/$1" bnc bdata with_data datadir parent base ts tmpd old dataold free need dbfile safety
+  ts=$(date +%Y%m%d-%H%M%S)
+  echo "=== Wiederherstellung von Backup $name ==="
+  echo '--- 1/7 Backup vollständig prüfen'
+  helper backup_verify "$BACKUP_DIR" "$name" || { echo 'ABBRUCH: Backup-Prüfung fehlgeschlagen – es wurde nichts verändert.'; return 66; }
+
+  echo '--- 2/7 Voraussetzungen prüfen'
+  bnc=$(helper backup_info "$BACKUP_DIR" "$name" nc_path); bdata=$(helper backup_info "$BACKUP_DIR" "$name" datadir)
+  bdata=${bdata%/}
+  with_data=$(helper backup_info "$BACKUP_DIR" "$name" user_data_included)
+  datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
+  parent=$(dirname "$NCM_NC_PATH"); base=$(basename "$NCM_NC_PATH")
+  [ "${bnc%/}" = "$NCM_NC_PATH" ] || { echo "ABBRUCH: Backup gehört zu $bnc, nicht zu $NCM_NC_PATH."; return 67; }
+  [ -z "$bdata" ] || [ "$bdata" = "$datadir" ] || { echo "ABBRUCH: Datenverzeichnis im Backup ($bdata) weicht vom aktuellen ($datadir) ab."; return 67; }
+  case "$datadir/" in "$NCM_NC_PATH"/*)
+    echo "ABBRUCH: Das Datenverzeichnis liegt im Programmordner ($datadir). Automatischer Restore nicht möglich – bitte von Hand nach WIEDERHERSTELLEN.txt."; return 67;; esac
+  local cbytes dbytes
+  cbytes=$(helper backup_info "$BACKUP_DIR" "$name" code_bytes); dbytes=$(helper backup_info "$BACKUP_DIR" "$name" data_bytes)
+  [[ "$cbytes" =~ ^[0-9]+$ ]] || cbytes=0; [[ "$dbytes" =~ ^[0-9]+$ ]] || dbytes=0
+  need=$(( cbytes / 1024 + 524288 ))
+  free=$(df -Pk "$parent" | awk 'NR==2{print $4}')
+  [ "$free" -gt "$need" ] || { echo "ABBRUCH: Zu wenig Platz in $parent (frei $((free/1024)) MiB, nötig ca. $((need/1024)) MiB)."; return 67; }
+  if [ "$with_data" = true ]; then
+    if mountpoint -q "$datadir"; then
+      echo "ABBRUCH: $datadir ist ein eigener Mountpoint und kann nicht umbenannt werden. Benutzerdaten bitte von Hand zurückspielen (WIEDERHERSTELLEN.txt)."; return 67
+    fi
+    need=$(( dbytes / 1024 + 1048576 ))
+    free=$(df -Pk "$(dirname "$datadir")" | awk 'NR==2{print $4}')
+    [ "$free" -gt "$need" ] || { echo "ABBRUCH: Zu wenig Platz für die Benutzerdaten (frei $((free/1024)) MiB, nötig ca. $((need/1024)) MiB)."; return 67; }
+  fi
+  echo '  ✓ Backup passt zu dieser Installation, genug Speicherplatz'
+
+  echo '--- 3/7 Sicherheits-Backup des aktuellen Stands (Datenbank + Code)'
+  do_backup 0 "vor Wiederherstellung von $name" "$name" || { echo 'ABBRUCH: Sicherheits-Backup fehlgeschlagen – es wurde nichts verändert.'; return 68; }
+  safety=$BACKUP_NAME
+  echo "  Sicherheits-Backup: $safety"
+
+  echo '--- 4/7 Programmcode vorbereiten und Wartungsmodus einschalten'
+  tmpd=$(mktemp -d "$parent/.ncm-restore-XXXXXX") || return 70
+  chmod 755 "$tmpd"   # occ läuft als Webserver-Benutzer und muss hinein
+  if ! tar -C "$tmpd" -xzf "$d/nextcloud-code.tar.gz" || [ ! -f "$tmpd/$base/occ" ]; then
+    rm -rf "$tmpd"; echo 'ABBRUCH: Programmcode konnte nicht entpackt werden – nichts verändert.'; return 70
+  fi
+  cp -a "$d/config.php" "$tmpd/$base/config/config.php"
+  chown -R "$NCM_WEBUSER:$NCM_WEBUSER" "$tmpd/$base"
+  # Der zurückgespielte Code soll erst nach Abschluss erreichbar werden.
+  runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" "$tmpd/$base/occ" --no-interaction maintenance:mode --on >/dev/null 2>&1 \
+    || echo '  Hinweis: Wartungsmodus im vorbereiteten Code nicht setzbar – wird nach dem Austausch gesetzt.'
+  MAINT_KEEP=1
+  maint_on || { rm -rf "$tmpd"; echo 'ABBRUCH: Wartungsmodus nicht einschaltbar.'; return 68; }
+  echo '  ✓ Nextcloud ist im Wartungsmodus'
+
+  if [ "$with_data" = true ]; then
+    echo '--- 5/7 Benutzerdaten zurückspielen'
+    dataold="$datadir.ncm-before-restore-$ts"
+    mv "$datadir" "$dataold" || { rm -rf "$tmpd"; echo 'FEHLER: Datenverzeichnis nicht umbenennbar. Nichts verändert, Wartungsmodus bleibt an.'; return 72; }
+    if ! tar -C "$(dirname "$datadir")" -xzf "$d/nextcloud-data.tar.gz"; then
+      rm -rf "$datadir"; mv "$dataold" "$datadir"; rm -rf "$tmpd"
+      echo 'FEHLER: Benutzerdaten nicht entpackbar – alter Stand wiederhergestellt, Wartungsmodus bleibt an.'; return 72
+    fi
+    chown -R "$NCM_WEBUSER:$NCM_WEBUSER" "$datadir"
+    echo "  ✓ Vorherige Benutzerdaten: $dataold"
+  else
+    echo '--- 5/7 Benutzerdaten: nicht im Backup – bleiben unverändert'
+  fi
+
+  echo '--- 6/7 Datenbank zurückspielen'
+  dbfile="$d/database.sql.gz"; [ -f "$dbfile" ] || dbfile="$d/database.sqlite.gz"
+  if ! nc_db_creds | helper db_restore "$dbfile" "$NCM_WEBUSER"; then
+    echo 'FEHLER beim Datenbank-Import. Spiele den Stand von vorher (Sicherheits-Backup) zurück ...'
+    local sdb="$BACKUP_DIR/$safety/database.sql.gz"; [ -f "$sdb" ] || sdb="$BACKUP_DIR/$safety/database.sqlite.gz"
+    if nc_db_creds | helper db_restore "$sdb" "$NCM_WEBUSER"; then echo '  Datenbank auf den Stand vor dem Restore zurückgesetzt.'
+    else echo "  ACHTUNG: Auch das Zurücksetzen schlug fehl. Sicherheits-Backup: $BACKUP_DIR/$safety"; fi
+    if [ "$with_data" = true ]; then rm -rf "$datadir"; mv "$dataold" "$datadir" && echo '  Benutzerdaten auf den vorherigen Stand zurückgesetzt.'; fi
+    rm -rf "$tmpd"; echo 'Wartungsmodus bleibt an – bitte Ausgabe prüfen.'; return 69
+  fi
+
+  echo '--- 7/7 Programmcode austauschen und abschließen'
+  old="$NCM_NC_PATH.ncm-before-restore-$ts"
+  mv "$NCM_NC_PATH" "$old" || { rm -rf "$tmpd"; echo 'FEHLER: Alter Code nicht umbenennbar. Datenbank ist bereits zurückgespielt – Wartungsmodus bleibt an.'; return 71; }
+  mv "$tmpd/$base" "$NCM_NC_PATH" || { mv "$old" "$NCM_NC_PATH"; echo 'FEHLER: Code-Austausch fehlgeschlagen – alter Code zurück, Wartungsmodus bleibt an.'; return 71; }
+  rmdir "$tmpd" 2>/dev/null
+  runocc maintenance:mode --on >/dev/null 2>&1
+  runocc maintenance:data-fingerprint || true
+  runocc maintenance:mode --off || { echo 'WARNUNG: Wartungsmodus konnte nicht ausgeschaltet werden.'; return 73; }
+  MAINT_BY_US=0
+  echo
+  echo 'WIEDERHERSTELLUNG ABGESCHLOSSEN.'
+  echo "  Vorheriger Code:          $old"
+  [ "$with_data" = true ] && echo "  Vorherige Benutzerdaten:  $dataold"
+  echo "  Sicherheits-Backup (DB+Code vom Stand davor): $safety"
+  [ "$with_data" = true ] || echo '  Benutzerdaten waren nicht im Backup: Bei Abweichungen unter Wartung „Alle Dateien neu einlesen“ ausführen.'
+  echo '  Wenn alles läuft, können die .ncm-before-restore-Ordner gelöscht werden.'
+  return 0
+}
+
+json_get() { python3 -c 'import json,sys
+try: v = json.loads(sys.stdin.read() or "{}").get(sys.argv[1])
+except ValueError: v = None
+print("" if v is None else (str(v).lower() if isinstance(v, bool) else v))' "$1"; }
+
+df_line() { df -Pk "$1" 2>/dev/null | awk 'NR==2{printf "%s|%s|%s|%s",$2,$3,$4,$6}'; }
+
+# Versionen aller laufenden PHP-FPM-Dienste, z.B. "8.2"
+fpm_versions() {
+  systemctl list-units --type=service --state=running --no-legend 'php*-fpm.service' 2>/dev/null \
+    | awk '{print $1}' | sed -n 's/^php\([0-9][0-9.]*\)-fpm\.service$/\1/p'
+}
+cli_version() { "$NCM_PHP" -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null; }
+apache_modphp() {
+  systemctl is-active --quiet apache2 2>/dev/null && apache2ctl -M 2>/dev/null | grep -q 'php[0-9]*_module'
+}
+
+# conf.d-Verzeichnisse, in die der Manager schreibt.
+php_ini_dirs() {
+  local cv v
+  cv="$(cli_version)"
+  [ -d "/etc/php/$cv/cli/conf.d" ] && echo "/etc/php/$cv/cli/conf.d"
+  for v in $(fpm_versions); do
+    [ -d "/etc/php/$v/fpm/conf.d" ] && echo "/etc/php/$v/fpm/conf.d"
+  done
+  if apache_modphp && [ -d "/etc/php/$cv/apache2/conf.d" ]; then echo "/etc/php/$cv/apache2/conf.d"; fi
+}
+
+php_value_ok() {
+  case "$1" in
+    memory_limit) [[ $2 =~ ^(-1|[0-9]{1,6}[KMGkmg]?)$ ]] ;;
+    upload_max_filesize|post_max_size) [[ $2 =~ ^[0-9]{1,6}[KMGkmg]?$ ]] ;;
+    max_execution_time|max_input_time) [[ $2 =~ ^(-1|[0-9]{1,6})$ ]] ;;
+    opcache.memory_consumption|opcache.interned_strings_buffer|opcache.max_accelerated_files) [[ $2 =~ ^[0-9]{1,7}$ ]] ;;
+    output_buffering) [[ $2 =~ ^[0-9]{1,7}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---------------------------------------------------------------- Aktionen
+
+case "$ACTION" in
+ dashboard)
+   os_name=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -1 | tr -d '"')
+   dietpi=false; [ -f /boot/dietpi/.version ] && dietpi=true
+   status=$(runocc status --output=json 2>/dev/null)
+   f_core=; tmpfile f_core; runocc config:list core >"$f_core" 2>/dev/null   # sensible Werte entfernt occ selbst
+   cfg=$(nc_config)
+   datadir=$(printf '%s' "$cfg" | json_get datadirectory)
+   fpm=inactive; pgrep -f 'php-fpm' >/dev/null 2>&1 && fpm=active
+   svc_state() { local s; for s in "$@"; do systemctl is-active --quiet "$s" 2>/dev/null && { echo active; return; }; done; echo inactive; }
+   redis=$(svc_state redis-server redis); mariadb=$(svc_state mariadb mysql)
+   apache=$(svc_state apache2); nginx=$(svc_state nginx)
+   webserver=unknown; [ "$apache" = active ] && webserver=apache2; [ "$nginx" = active ] && webserver=nginx
+   datadf=""; [ -n "$datadir" ] && [ -e "$datadir" ] && datadf=$(df_line "$datadir")
+   json_out os "$os_name" dietpi "$dietpi" kernel "$(uname -r)" arch "$(uname -m)" \
+     uptime "$(awk '{print int($1)}' /proc/uptime)" \
+     nc_path "$NCM_NC_PATH" backend "${NCM_BACKEND:-occ}" occ_path "$NCM_NC_PATH/occ" \
+     php_version "$("$NCM_PHP" -r 'echo PHP_VERSION;')" php_fpm "$fpm" \
+     redis "$redis" mariadb "$mariadb" apache "$apache" nginx "$nginx" webserver "$webserver" \
+     mem_total_kb "$(awk '/MemTotal/{print $2}' /proc/meminfo)" \
+     mem_available_kb "$(awk '/MemAvailable/{print $2}' /proc/meminfo)" \
+     root_df "$(df_line /)" data_df "$datadf" \
+     status:json "$status" core:jsonfile "$f_core" config:json "$cfg" ;;
+
+ php_values)
+   KEYS='memory_limit upload_max_filesize post_max_size max_execution_time max_input_time max_input_vars output_buffering file_uploads max_file_uploads opcache.enable opcache.memory_consumption opcache.interned_strings_buffer opcache.max_accelerated_files opcache.save_comments opcache.revalidate_freq apc.enabled apc.shm_size session.save_handler session.save_path'
+   cli_json=$("$NCM_PHP" -r '$o=[]; foreach(explode(" ",$argv[1]) as $k){$v=ini_get($k);$o[$k]=$v===false?null:(string)$v;} echo json_encode($o);' -- "$KEYS")
+   cli_files=$("$NCM_PHP" -r 'echo php_ini_loaded_file(), "\n", str_replace(",", "\n", (string) php_ini_scanned_files());' | sed 's/^[[:space:]]*//' | grep -v '^$' | tr '\n' '|')
+   fpm_json='{}'; fpm_files=""; ver=$(fpm_versions | head -1)
+   if [ -n "$ver" ] && command -v "php-fpm$ver" >/dev/null 2>&1; then
+     tmp=$(mktemp); "php-fpm$ver" -i >"$tmp" 2>/dev/null || true
+     fpm_json=$("$NCM_PHP" -r '$txt=file_get_contents($argv[2]);$o=[];foreach(explode(" ",$argv[1]) as $k){$q=preg_quote($k,"/");$o[$k]=preg_match("/^".$q." => ([^\\r\\n]*?)(?: => [^\\r\\n]*)?$/mi",$txt,$m)?trim($m[1]):null;}echo json_encode($o);' -- "$KEYS" "$tmp")
+     rm -f "$tmp"
+     [ -d "/etc/php/$ver/fpm/conf.d" ] && fpm_files="/etc/php/$ver/fpm/php.ini|$(find -L "/etc/php/$ver/fpm/conf.d" -maxdepth 1 -type f -name '*.ini' -printf '%f\n' 2>/dev/null | sort | sed "s#^#/etc/php/$ver/fpm/conf.d/#" | tr '\n' '|')"
+   fi
+   # Werte aus Nextclouds .user.ini (gilt für PHP-FPM) und .htaccess (gilt für mod_php)
+   overrides=$(helper nc_overrides "$NCM_NC_PATH")
+   # Fundstellen der Werte in den tatsächlich geladenen INI-Dateien (CLI und FPM, in Ladereihenfolge)
+   srcargs=()
+   IFS='|' read -r -a _cf <<<"$cli_files"; for f in "${_cf[@]}"; do [ -n "$f" ] && srcargs+=("cli:$f"); done
+   IFS='|' read -r -a _ff <<<"$fpm_files"; for f in "${_ff[@]}"; do [ -n "$f" ] && srcargs+=("fpm:$f"); done
+   f_src=; tmpfile f_src; helper ini_sources "$(tr ' ' ',' <<<"$KEYS")" "${srcargs[@]}" >"$f_src"
+   f_base=; tmpfile f_base
+   "$NCM_PHP" -r '$o=["keys"=>explode(" ",$argv[1]),"cli"=>json_decode($argv[2],true),"fpm"=>json_decode($argv[3],true),"cli_files"=>array_values(array_filter(explode("|",$argv[4]))),"fpm_files"=>array_values(array_filter(explode("|",$argv[5]))),"fpm_service"=>$argv[6],"overrides"=>json_decode($argv[7],true)];echo json_encode($o,JSON_UNESCAPED_SLASHES);' -- "$KEYS" "$cli_json" "$fpm_json" "$cli_files" "$fpm_files" "${ver:+php$ver-fpm}" "$overrides" >"$f_base"
+   python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); o["sources"]=json.load(open(sys.argv[2])); print(json.dumps(o))' "$f_base" "$f_src" ;;
+
+ diagnose)
+   f_db=; tmpfile f_db; nc_db_creds | helper db_info >"$f_db"
+   f_redis=; tmpfile f_redis; nc_redis_creds | helper redis_info >"$f_redis"
+   f_core=; tmpfile f_core; runocc config:list core >"$f_core" 2>/dev/null
+   cron_line=$(crontab -l -u "$NCM_WEBUSER" 2>/dev/null | grep -v '^[[:space:]]*#' | grep -m1 'cron.php' || true)
+   # Alternativ in /etc/crontab oder /etc/cron.d/* (mit Benutzerfeld)
+   [ -n "$cron_line" ] || cron_line=$(grep -h -v '^[[:space:]]*#' /etc/crontab /etc/cron.d/* 2>/dev/null | grep -m1 'cron.php' || true)
+   timer=$(systemctl list-timers --all --no-legend 2>/dev/null | grep -i -m1 'nextcloud' | awk '{for(i=1;i<=NF;i++) if ($i ~ /\.timer$/) print $i}' || true)
+   cfg=$(nc_config)
+   json_out db:jsonfile "$f_db" redis:jsonfile "$f_redis" core:jsonfile "$f_core" cron_entry "$cron_line" cron_timer "$timer" \
+     redis_service "$( (systemctl is-active --quiet redis-server || systemctl is-active --quiet redis) 2>/dev/null && echo active || echo inactive)" \
+     memcache_local "$(printf '%s' "$cfg" | json_get memcache.local)" memcache_distributed "$(printf '%s' "$cfg" | json_get memcache.distributed)" \
+     memcache_locking "$(printf '%s' "$cfg" | json_get memcache.locking)" ;;
+
+ php_platform)
+   os_id=$(sed -n 's/^ID=//p' /etc/os-release | head -1 | tr -d '"')
+   platform="$os_id"; [ -f /boot/dietpi/.version ] && platform="dietpi"
+   fpm_vers=$(fpm_versions | tr '\n' ' '); fpm_ver=$(fpm_versions | head -1)
+   fpm_service=""; [ -n "$fpm_ver" ] && fpm_service="php$fpm_ver-fpm"
+   web_sapi=unknown; web_ini=""
+   if [ -n "$fpm_ver" ]; then web_sapi=fpm; web_ini="/etc/php/$fpm_ver/fpm/php.ini"
+   elif apache_modphp; then web_sapi=apache2-mod_php; web_ini="/etc/php/$(cli_version)/apache2/php.ini"; fi
+   fpm_mem=""; fpm_upload=""
+   if [ -n "$fpm_ver" ] && command -v "php-fpm$fpm_ver" >/dev/null 2>&1; then
+     # php-fpm -i löst php.ini + conf.d auf, ohne einen phpinfo-Endpunkt im Web zu öffnen.
+     fiout=$("php-fpm$fpm_ver" -i 2>/dev/null || true)
+     val() { printf '%s\n' "$fiout" | awk -F ' => ' -v k="$1" '$1==k{print $2; exit}'; }
+     fpm_mem=$(val memory_limit); fpm_upload=$(val upload_max_filesize)
+   fi
+   dietpi_files=""; manager_files=""
+   if [ -d /etc/php ]; then
+     dietpi_files=$(find /etc/php \( -type f -o -type l \) 2>/dev/null | grep -E '/(conf\.d|mods-available)/[^/]*dietpi[^/]*nextcloud[^/]*\.ini$' | sort -u | tr '\n' ' ')
+     manager_files=$(find /etc/php -path '*/conf.d/99-nextcloud-manager.ini' -print 2>/dev/null | sort -u | tr '\n' ' ')
+   fi
+   user_ini=""; [ -f "$NCM_NC_PATH/.user.ini" ] && user_ini="$NCM_NC_PATH/.user.ini"
+   json_out platform "$platform" os_id "$os_id" \
+     os_pretty "$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -1 | tr -d '"')" \
+     cli_version "$(cli_version)" cli_full "$("$NCM_PHP" -r 'echo PHP_VERSION;')" cli_binary "$NCM_PHP" \
+     cli_ini "$("$NCM_PHP" --ini | sed -n 's/^Loaded Configuration File: *//p')" \
+     web_sapi "$web_sapi" fpm_service "$fpm_service" fpm_services "$fpm_vers" web_ini "$web_ini" \
+     fpm_memory_limit "$fpm_mem" fpm_upload_max "$fpm_upload" \
+     dietpi_files "$dietpi_files" user_ini "$user_ini" manager_files "$manager_files" ;;
+
+ status) runocc status ;;
+ repair)   take_lock; runocc maintenance:repair ;;
+ indices)  take_lock; runocc db:add-missing-indices ;;
+ columns)  take_lock; runocc db:add-missing-columns ;;
+ keys)     take_lock; runocc db:add-missing-primary-keys ;;
+ bigint)   take_lock; runocc db:convert-filecache-bigint ;;
+ maint_on)  take_lock; runocc maintenance:mode --on ;;
+ maint_off) take_lock; runocc maintenance:mode --off ;;
+ update_check)
+   runocc update:check || { echo 'Hinweis: update:check wird von dieser Installation evtl. nicht unterstützt.'; exit 1; } ;;
+
+ preflight)
+   echo '=== Nextcloud Update-Vorprüfung ==='
+   st=$(runocc status --output=json) || { runocc status; echo 'FEHLER: occ status fehlgeschlagen.'; exit 10; }
+   runocc status
+   [ -f "$NCM_NC_PATH/updater/updater.phar" ] || { echo 'FEHLER: updater/updater.phar fehlt.'; exit 11; }
+   if [ "$(printf '%s' "$st" | json_get maintenance)" = true ]; then
+     echo 'HINWEIS: Wartungsmodus ist bereits aktiv.'
+   fi
+   datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
+   FREE=$(df -Pk "$NCM_NC_PATH" | awk 'NR==2{print $4}')
+   # Liegt das Datenverzeichnis unter dem Programmverzeichnis, zählt es nicht mit:
+   # der Updater sichert nur den Programmcode.
+   SIZE=$(du -sk ${datadir:+"--exclude=$datadir"} "$NCM_NC_PATH" | awk '{print $1}')
+   echo "Freier Speicher: $((FREE / 1024)) MiB; Nextcloud-Programmcode: $((SIZE / 1024)) MiB${datadir:+ (ohne Datenverzeichnis)}"
+   [ "$FREE" -gt "$((SIZE * 2))" ] || { echo 'FEHLER: Für das Update wird mindestens die doppelte Größe des Programmcodes als freier Speicher benötigt.'; exit 12; }
+   "$NCM_PHP" -v | head -1
+   echo "Backend: ${NCM_BACKEND:-occ}"
+   latest=$(find "$BACKUP_DIR" -maxdepth 1 -mindepth 1 -type d -name '[0-9]*-[0-9]*' -printf '%f\n' 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | sort -r | head -1)
+   if [ -n "$latest" ]; then
+     echo "Letztes Manager-Backup: $latest ($( [ "$(helper backup_info "$BACKUP_DIR" "$latest" user_data_included)" = true ] && echo 'mit' || echo 'ohne') Benutzerdaten, Prüfung: $(case "$(helper backup_info "$BACKUP_DIR" "$latest" ok)" in true) echo 'in Ordnung';; false) echo 'FEHLERHAFT';; *) echo 'nicht geprüft';; esac))"
+   else
+     echo 'Letztes Manager-Backup: keines'
+   fi
+   echo '--- Verfügbare App-Updates'
+   timeout 60 runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" "$NCM_NC_PATH/occ" --no-interaction app:update --showonly 2>&1 || echo '(App Store nicht erreichbar)'
+   echo 'Vorprüfung erfolgreich. Vor dem Update externes Backup/Snapshot sicherstellen.' ;;
+
+ nextcloud_update)
+   take_lock
+   WITH_BACKUP=0; WITH_APPS=0
+   for flag in "${@:2}"; do
+     case "$flag" in backup) WITH_BACKUP=1 ;; apps) WITH_APPS=1 ;; *) echo "Unbekannte Option: $flag"; exit 65 ;; esac
+   done
+   echo '=== Nextcloud Update ==='
+   run_hook pre-update || { echo 'ABBRUCH: pre-update-Hook fehlgeschlagen – Update wird nicht gestartet.'; exit 18; }
+   "$0" preflight || exit $?
+   if [ "$WITH_BACKUP" = 1 ]; then do_backup 0 'vor Nextcloud-Update' || { echo 'FEHLER: Backup fehlgeschlagen – Update wird nicht gestartet.'; exit 19; }; fi
+   if [ "$WITH_BACKUP" = 0 ]; then
+     # Ohne vollständiges Backup wenigstens config.php sichern.
+     mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"; TS=$(date +%Y%m%d-%H%M%S)
+     cp -a "$NCM_NC_PATH/config/config.php" "$BACKUP_DIR/config.php.$TS" || exit 20
+     chown root:root "$BACKUP_DIR/config.php.$TS"; chmod 600 "$BACKUP_DIR/config.php.$TS"
+     echo "config.php gesichert: $BACKUP_DIR/config.php.$TS"
+   fi
+   echo 'Starte offiziellen Nextcloud-Updater...'
+   # Der Updater führt im nicht-interaktiven Modus "occ upgrade" bereits selbst aus.
+   runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" "$NCM_NC_PATH/updater/updater.phar" --no-interaction \
+     || { echo 'FEHLER: Updater abgebrochen.'; exit 21; }
+   st=$(runocc status --output=json)
+   if [ "$(printf '%s' "$st" | json_get needsDbUpgrade)" = true ]; then
+     echo 'Datenbank-Upgrade noch ausstehend – führe occ upgrade aus...'
+     runocc upgrade || { echo 'FEHLER bei occ upgrade. Wartungsmodus wird nicht automatisch verändert; Ausgabe prüfen.'; exit 22; }
+   fi
+   runocc maintenance:repair || exit 23
+   runocc db:add-missing-indices || exit 24
+   runocc db:add-missing-columns || exit 25
+   runocc db:add-missing-primary-keys || exit 26
+   if [ "$WITH_APPS" = 1 ]; then
+     echo 'Aktualisiere Apps...'
+     runocc app:update --all || echo 'WARNUNG: Nicht alle Apps konnten aktualisiert werden (Ausgabe prüfen).'
+   fi
+   echo 'Abschlussstatus:'
+   runocc status || exit 27
+   if [ "$(runocc status --output=json | json_get maintenance)" = true ]; then
+     echo 'HINWEIS: Wartungsmodus ist noch aktiv. Nach Prüfung unter "Wartung" ausschalten.'
+   fi
+   run_hook post-update || echo 'WARNUNG: post-update-Hook fehlgeschlagen.'
+   echo 'UPDATE ERFOLGREICH ABGESCHLOSSEN.' ;;
+
+ setupchecks)
+   # Exit-Code ist bei Warnungen ungleich 0 – die JSON-Ausgabe ist das Ergebnis.
+   runocc setupchecks --output=json; true ;;
+
+ app_updates)
+   f_apps=; tmpfile f_apps; runocc app:list --output=json >"$f_apps" 2>/dev/null
+   json_out updates "$(runocc app:update --showonly 2>&1)" apps:jsonfile "$f_apps" ;;
+ app_update)
+   take_lock
+   APP="${2:-}"; [[ "$APP" =~ ^[a-z0-9_]{1,64}$ ]] || { echo 'Ungültige App-ID'; exit 65; }
+   runocc app:update "$APP" ;;
+ app_update_all) take_lock; runocc app:update --all ;;
+
+ backup)      take_lock; do_backup 0 manuell ;;
+ backup_full) take_lock; do_backup 1 'manuell (mit Benutzerdaten)' ;;
+ backup_list) helper backup_list "$BACKUP_DIR" ;;
+ backup_verify)
+   take_lock
+   NAME="${2:-}"; [[ "$NAME" =~ ^[0-9]{8}-[0-9]{6}$ ]] && [ -d "$BACKUP_DIR/$NAME" ] || { echo 'Backup nicht gefunden'; exit 65; }
+   echo "=== Prüfe Backup $NAME ==="
+   helper backup_verify "$BACKUP_DIR" "$NAME" ;;
+ restore_plan)
+   # Schnelle Vorab-Prüfung für die Oberfläche (ohne vollständiges Lesen der Archive).
+   NAME="${2:-}"; [[ "$NAME" =~ ^[0-9]{8}-[0-9]{6}$ ]] && [ -d "$BACKUP_DIR/$NAME" ] || { echo 'Backup nicht gefunden'; exit 65; }
+   datadir=$(nc_config | json_get datadirectory); datadir=${datadir%/}
+   inside=false; case "$datadir/" in "$NCM_NC_PATH"/*) inside=true;; esac
+   mp=false; [ -n "$datadir" ] && mountpoint -q "$datadir" && mp=true
+   json_out nc_path "$NCM_NC_PATH" datadir "$datadir" datadir_inside "$inside" datadir_mountpoint "$mp" \
+     free_code_kb "$(df -Pk "$(dirname "$NCM_NC_PATH")" | awk 'NR==2{print $4}')" \
+     free_data_kb "$( [ -n "$datadir" ] && df -Pk "$(dirname "$datadir")" | awk 'NR==2{print $4}')" \
+     free_backup_kb "$(df -Pk "$BACKUP_DIR" | awk 'NR==2{print $4}')" ;;
+ restore_backup)
+   take_lock
+   NAME="${2:-}"; [[ "$NAME" =~ ^[0-9]{8}-[0-9]{6}$ ]] && [ -d "$BACKUP_DIR/$NAME" ] || { echo 'Backup nicht gefunden'; exit 65; }
+   do_restore "$NAME" ;;
+ backup_delete)
+   take_lock
+   NAME="${2:-}"; [[ "$NAME" =~ ^[0-9]{8}-[0-9]{6}$ ]] && [ -d "$BACKUP_DIR/$NAME" ] || { echo 'Backup nicht gefunden'; exit 65; }
+   rm -rf -- "${BACKUP_DIR:?}/$NAME" && echo "Backup $NAME gelöscht." ;;
+
+ logs)
+   N="${2:-500}"; [[ "$N" =~ ^[0-9]{2,4}$ ]] || N=500
+   cfg=$(nc_config)
+   ltype=$(printf '%s' "$cfg" | json_get log_type)
+   web=""; systemctl is-active --quiet nginx 2>/dev/null && web=/var/log/nginx/error.log
+   systemctl is-active --quiet apache2 2>/dev/null && web=/var/log/apache2/error.log
+   fv=$(fpm_versions | head -1)
+   fpmlog=""; [ -n "$fv" ] && fpmlog=$(helper fpm_log "$fv")
+   # Log-Inhalte über Dateien weiterreichen: als Argument scheitern sie ab 128 KB
+   # ("Argument list too long").
+   f_nc=; f_fpm=; f_web=; tmpfile f_nc; tmpfile f_fpm; tmpfile f_web
+   # Als Webserver-Benutzer: der Pfad stammt aus config.php und darf keine root-Dateien erreichen.
+   runuser -u "$NCM_WEBUSER" -- python3 "$HELPER" nclog "$(nc_logfile)" "$N" >"$f_nc"
+   [ -n "$fpmlog" ] && helper textlog "$fpmlog" 200 >"$f_fpm"
+   [ -n "$web" ] && helper textlog "$web" 200 >"$f_web"
+   json_out log_type "${ltype:-file}" loglevel "$(printf '%s' "$cfg" | json_get loglevel)" \
+     log_rotate_size "$(printf '%s' "$cfg" | json_get log_rotate_size)" \
+     archives "$(find "$BACKUP_DIR/logs" -maxdepth 1 -name 'nextcloud.log.*.gz' 2>/dev/null | wc -l)" \
+     nextcloud:jsonfile "$f_nc" fpm:jsonfile "$f_fpm" web:jsonfile "$f_web" ;;
+
+ log_archive)
+   # Nextcloud-Log komprimiert archivieren und danach leeren (Datei bleibt mit Besitzer und Rechten erhalten).
+   take_lock
+   lf=$(nc_logfile)
+   ltype=$(nc_config | json_get log_type)
+   [ -z "$ltype" ] || [ "$ltype" = file ] || { echo "Nextcloud schreibt nicht in eine Datei (log_type=$ltype) – nichts zu tun."; exit 65; }
+   # Lesen und Leeren als Webserver-Benutzer: Was www-data nicht schreiben darf, wird nicht angefasst.
+   runuser -u "$NCM_WEBUSER" -- test -f "$lf" -a -w "$lf" || { echo "FEHLER: $lf fehlt oder ist für $NCM_WEBUSER nicht beschreibbar."; exit 36; }
+   ARCH="$BACKUP_DIR/logs"; mkdir -p "$ARCH"; chmod 700 "$BACKUP_DIR" "$ARCH"
+   TS=$(date +%Y%m%d-%H%M%S); target="$ARCH/nextcloud.log.$TS.gz"
+   size=$(runuser -u "$NCM_WEBUSER" -- stat -c %s "$lf")
+   free=$(df -Pk "$ARCH" | awk 'NR==2{print $4}')
+   [ "$free" -gt $(( size / 1024 / 5 + 102400 )) ] || { echo "FEHLER: Zu wenig Platz in $ARCH."; exit 36; }
+   echo "Archiviere $lf ($((size / 1024)) KiB) nach $target ..."
+   # Lesen als www-data, Schreiben als root in das nur für root lesbare Archiv.
+   if ! runuser -u "$NCM_WEBUSER" -- cat -- "$lf" | gzip -6 > "$target.part"; then
+     rm -f "$target.part"; echo 'FEHLER: Archivieren fehlgeschlagen – Log wurde NICHT geleert.'; exit 36
+   fi
+   gzip -t "$target.part" || { rm -f "$target.part"; echo 'FEHLER: Archiv ist fehlerhaft – Log wurde NICHT geleert.'; exit 36; }
+   chmod 600 "$target.part"; mv "$target.part" "$target"
+   runuser -u "$NCM_WEBUSER" -- truncate -s 0 -- "$lf" || { echo 'FEHLER: Log konnte nicht geleert werden (Archiv ist vorhanden).'; exit 37; }
+   echo "Log geleert. Archiv: $target ($(du -h "$target" | cut -f1))"
+   # Höchstens NCM_LOG_ARCHIVE_KEEP Archive behalten (Standard 10).
+   keep="$(read_env NCM_LOG_ARCHIVE_KEEP)"; [[ "$keep" =~ ^[0-9]{1,3}$ ]] || keep=10
+   find "$ARCH" -maxdepth 1 -name 'nextcloud.log.*.gz' -printf '%f\n' | sort -r | tail -n +$((keep + 1)) | while read -r old; do
+     rm -f -- "${ARCH:?}/$old" && echo "Altes Archiv entfernt: $old"
+   done ;;
+
+ log_rotate_set)
+   take_lock
+   V="${2:-}"; [[ "$V" =~ ^[0-9]{1,12}$ ]] || { echo 'Ungültige Größe (Bytes, 0 = keine Rotation)'; exit 65; }
+   runocc log:file --rotate-size="$V" && echo "Log-Rotation: $( [ "$V" = 0 ] && echo 'aus' || echo "ab $((V / 1048576)) MiB")" ;;
+
+ log_level_set)
+   take_lock
+   case "${2:-}" in 0) L=debug;; 1) L=info;; 2) L=warning;; 3) L=error;; 4) L=fatal;; *) echo 'Ungültiges Log-Level (0-4)'; exit 65;; esac
+   runocc log:manage --level="$L" && echo "Log-Level: $L" ;;
+
+ fpm_info)
+   # shellcheck disable=SC2046
+   helper fpm_info $(fpm_versions) ;;
+ fpm_set)
+   take_lock
+   V="${2:-}"; POOL="${3:-}"; shift 3 2>/dev/null || { echo 'Argumente fehlen'; exit 65; }
+   fpm_versions | grep -qx "$V" || { echo "PHP-FPM $V läuft nicht"; exit 65; }
+   [[ "$POOL" =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || { echo 'Ungültiger Pool-Name'; exit 65; }
+   target="/etc/php/$V/fpm/pool.d/zzzz-nextcloud-manager.conf"
+   TS=$(date +%Y%m%d-%H%M%S); BK="$BACKUP_DIR/php"; mkdir -p "$BK"; chmod 700 "$BACKUP_DIR" "$BK"
+   bk=""; [ -f "$target" ] && { bk="$BK/fpm-$V-pool.$TS"; cp -a "$target" "$bk"; }
+   helper fpm_write "$V" "$POOL" "$@" || exit 66
+   if ! "php-fpm$V" -t 2>&1; then
+     echo "FEHLER: php-fpm$V -t meldet einen Fehler – Änderung wird zurückgerollt."
+     if [ -n "$bk" ]; then cp -a "$bk" "$target"; else rm -f "$target"; fi
+     exit 68
+   fi
+   systemctl reload "php$V-fpm" || { echo "FEHLER: Reload von php$V-fpm fehlgeschlagen."; exit 69; }
+   echo "Neu geladen: php$V-fpm" ;;
+
+ files_scan)       take_lock; runocc files:scan --all ;;
+ files_cleanup)    take_lock; runocc files:cleanup ;;
+ trashbin_expire)  take_lock; runocc trashbin:expire ;;
+ versions_expire)  take_lock; runocc versions:expire ;;
+ trashbin_cleanup) take_lock; runocc trashbin:cleanup --all-users ;;
+ versions_cleanup) take_lock; runocc versions:cleanup ;;
+
+ php_info)
+   echo "PHP: $("$NCM_PHP" -v | head -1)"
+   "$NCM_PHP" --ini
+   echo
+   "$NCM_PHP" -r 'foreach(["memory_limit","upload_max_filesize","post_max_size","max_execution_time","max_input_time","opcache.memory_consumption","opcache.interned_strings_buffer","opcache.max_accelerated_files","output_buffering"] as $k) echo $k."=".ini_get($k).PHP_EOL;'
+   echo; echo "Manager-Ziele:"; php_ini_dirs ;;
+
+ php_set)
+   take_lock
+   KEY="${2:-}"; VAL="${3:-}"
+   php_value_ok "$KEY" "$VAL" || { echo "PHP-Einstellung oder Wert nicht erlaubt: $KEY=$VAL"; exit 65; }
+   TS=$(date +%Y%m%d-%H%M%S); BK="$BACKUP_DIR/php"; mkdir -p "$BK"; chmod 700 "$BACKUP_DIR" "$BK"
+   targets=(); backups=()
+   restore() {
+     local i
+     for i in "${!targets[@]}"; do
+       if [ -n "${backups[$i]}" ]; then cp -a "${backups[$i]}" "${targets[$i]}"; else rm -f "${targets[$i]}"; fi
+     done
+     echo 'Änderungen zurückgerollt.'
+   }
+   key_re="^[[:space:]]*${KEY//./\\.}[[:space:]]*="
+   while IFS= read -r dir; do
+     target="$dir/99-nextcloud-manager.ini"; bk=""
+     if [ -f "$target" ]; then bk="$BK/$(printf '%s' "$dir" | tr '/' '_' | sed 's/^_//').$TS"; cp -a "$target" "$bk"; fi
+     targets+=("$target"); backups+=("$bk")
+     tmp=$(mktemp)
+     { [ -f "$target" ] && grep -v -E "$key_re" "$target"; printf '%s=%s\n' "$KEY" "$VAL"; } >"$tmp"
+     install -m 0644 "$tmp" "$target"; rm -f "$tmp"
+     echo "Gesetzt: $target -> $KEY=$VAL"
+   done < <(php_ini_dirs)
+   [ "${#targets[@]}" -gt 0 ] || { echo "Keine PHP-conf.d-Verzeichnisse gefunden"; exit 67; }
+
+   # Prüfen, bevor irgendein Dienst neu geladen wird.
+   for v in $(fpm_versions); do
+     if command -v "php-fpm$v" >/dev/null 2>&1 && ! "php-fpm$v" -t 2>&1; then
+       echo "FEHLER: php-fpm$v -t meldet einen Konfigurationsfehler."; restore; exit 68
+     fi
+   done
+   if apache_modphp && ! apache2ctl configtest; then echo 'FEHLER: apache2ctl configtest fehlgeschlagen.'; restore; exit 68; fi
+   # max_execution_time ist in der CLI fest 0 – dort ist kein Vergleich möglich.
+   eff=$("$NCM_PHP" -r 'echo ini_get($argv[1]);' -- "$KEY")
+   [ "$KEY" = max_execution_time ] || [ "$eff" = "$VAL" ] || echo "WARNUNG: CLI meldet $KEY=$eff – eine später geladene Datei überschreibt den Wert."
+
+   # Jede FPM-Version neu laden, in die geschrieben wurde (nicht nur die CLI-Version).
+   for v in $(fpm_versions); do
+     [ -f "/etc/php/$v/fpm/conf.d/99-nextcloud-manager.ini" ] || continue
+     systemctl reload "php$v-fpm" || { echo "FEHLER: Reload von php$v-fpm fehlgeschlagen."; exit 69; }
+     echo "Neu geladen: php$v-fpm"
+   done
+   if apache_modphp; then systemctl reload apache2 || exit 69; echo 'Neu geladen: apache2'; fi
+   echo 'Fertig.' ;;
+
+ *) echo 'Nicht erlaubte Aktion.'; exit 64 ;;
+esac

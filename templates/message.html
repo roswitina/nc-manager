@@ -1,0 +1,11 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% block body %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  <p class="{{ 'bad' if bad else 'ok' }}">{{ text }}</p>
+  {% if job_id %}<p><a class="btn" href="{{ url_for('job_view', jid=job_id) }}">Laufende Aktion ansehen</a></p>{% endif %}
+  {% if output %}<pre>{{ output }}</pre>{% endif %}
+  <p><a class="btn" href="{{ url_for('home') }}">← Dashboard</a></p>
+</div>
+{% endblock %}

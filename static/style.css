@@ -1,0 +1,81 @@
+/*
+ * Nextcloud Server Manager
+ * Copyright (c) 2026 roswitina@hotmail.com
+ * SPDX-License-Identifier: MIT
+ * Lizenz: siehe LICENSE.md · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
+ */
+:root{--bg:#0b1220;--card:#131e31;--line:#263650;--text:#e7eefb;--muted:#9fb0c8;--accent:#1683ff}
+body{font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0}
+.wrap{max-width:1100px;margin:30px auto;padding:18px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin:16px 0}
+.card.narrow{max-width:420px;margin:80px auto}
+h1{margin:0}
+.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.dash{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+.btn,button{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:9px;padding:11px 14px;font:inherit;font-weight:650;cursor:pointer;text-decoration:none}
+button:disabled{opacity:.5;cursor:not-allowed}
+.full{width:100%}
+.warn{background:#d98c16}.danger{background:#c64040}
+.ok{color:#78e08f}.bad{color:#ff8585}.diff{color:#fcd34d}
+pre{background:#07101d;padding:15px;border-radius:9px;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:520px}
+input,select{width:100%;box-sizing:border-box;padding:11px;border-radius:8px;border:1px solid #40516b;background:#091321;color:#fff;margin:6px 0 12px;font:inherit}
+label.check{display:flex;gap:10px;align-items:flex-start;margin:10px 0}
+label.check input{width:auto;margin:3px 0 0}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row form{margin:0}
+.entry{border-top:1px solid var(--line);padding:10px 0}
+.metric{padding:8px 0;border-bottom:1px solid var(--line)}
+.label{font-size:.78rem;text-transform:uppercase;color:#8fa5c3}
+.value{font-weight:650;margin-top:3px;word-break:break-word}
+.pill{padding:3px 8px;border-radius:999px;background:#173e2a;color:#86efac}
+.pillbad{padding:3px 8px;border-radius:999px;background:#4a2025;color:#fda4af}
+.pillrun{padding:3px 8px;border-radius:999px;background:#1e3a5f;color:#93c5fd}
+.health{line-height:1.9}
+.notice{background:#1e3a5f;border:1px solid #2f5a8f;border-radius:10px;padding:10px 14px;margin:12px 0}
+table{width:100%;border-collapse:collapse}
+td,th{border-bottom:1px solid var(--line);padding:9px;text-align:left}
+.scroll{overflow:auto}
+@media (max-width:600px){.wrap{margin:0 auto;padding:12px}.dash,.grid{grid-template-columns:1fr}}
+.small{font-size:.85rem}
+.small-btn{padding:6px 10px;font-size:.85rem;white-space:nowrap}
+td form{margin:0}
+.nav{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0 4px;border-bottom:1px solid var(--line)}
+.nav a{color:var(--muted);text-decoration:none;padding:9px 12px;border-radius:8px 8px 0 0;font-weight:600}
+.nav a:hover{color:var(--text);background:var(--card)}
+.nav a.active{color:var(--text);background:var(--card);border:1px solid var(--line);border-bottom-color:var(--card);margin-bottom:-1px}
+a{color:#7cb8ff}
+.sev{display:inline-block;min-width:70px;text-align:center;padding:2px 8px;border-radius:999px;font-size:.8rem;font-weight:700}
+.sev-error,.lv-3,.lv-4{background:#4a2025;color:#fda4af}
+.sev-warning,.lv-2{background:#4a3a14;color:#fcd34d}
+.sev-info,.lv-1,.lv-0,.lv--1{background:#1e3a5f;color:#93c5fd}
+.sev-success{background:#173e2a;color:#86efac}
+.counts{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0}
+.filters{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.filters label{display:block;font-size:.8rem;color:var(--muted)}
+.filters input,.filters select{margin:4px 0 0;width:auto;min-width:140px}
+.log-entry{border-top:1px solid var(--line);padding:10px 0}
+.log-entry .meta{font-size:.82rem;color:var(--muted)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem;word-break:break-word}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:0 12px}
+h3.group{margin:18px 0 8px;color:var(--muted);font-size:.9rem;text-transform:uppercase;letter-spacing:.04em}
+@media (max-width:700px){.nav{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}.nav a{white-space:nowrap;padding:8px 10px}h1{font-size:1.4rem}}
+.basis{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.78rem;font-weight:700;white-space:nowrap}
+.basis-doku{background:#173e2a;color:#86efac}
+.basis-beispiel{background:#1e3a5f;color:#93c5fd}
+.basis-richtwert{background:#3a3550;color:#c4b5fd}
+.legend{margin:10px 0 4px;display:grid;gap:4px;color:var(--muted)}
+.backup-form{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.backup-form label.check{flex:1;min-width:260px;margin:0}
+details summary{cursor:pointer;padding:4px 0}
+ol li{margin:4px 0}
+.footer{margin:28px 0 8px;padding-top:12px;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted);text-align:center}
+.legal h2,.legal h3,.legal h4{margin:18px 0 6px}
+.legal li{margin:3px 0}
+.inline-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.inline-form label{min-width:90px;color:var(--muted);font-size:.9rem}
+.inline-form select{width:auto;margin:0}
+.since-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.since-bar form{margin:0}
+.since-bar .notice{margin:0;padding:6px 10px}

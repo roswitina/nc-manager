@@ -1,0 +1,41 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, metric_html, pill %}
+{% block body %}
+{% if err %}<div class="card"><pre>{{ err }}</pre></div>{% endif %}
+{% if hints %}<div class="card"><h2>Hinweise</h2>{% for h in hints %}<p class="bad">⚠ {{ h }}</p>{% endfor %}</div>{% endif %}
+<div class="dash">
+<div class="card"><h2>Datenbank</h2>
+  {% call metric_html('Verbindung') %}{{ pill(db.ok, 'OK', 'Fehler') }}{% endcall %}
+  {% if db.error %}<p class="bad small mono">{{ db.error }}</p>{% endif %}
+  {{ metric('Typ', db.type) }}
+  {{ metric('Version', db.version) }}
+  {{ metric('Host / Name', (db.host or '–') ~ ' / ' ~ (db.name or '–')) }}
+  {{ metric('Größe', db.size_bytes|bytes if db.size_bytes is not none else '–') }}
+  {{ metric('Tabellen', db.tables) }}
+  {% if db.max_connections %}{{ metric('max_connections', db.max_connections) }}{% endif %}
+  {% if db.buffer_pool_bytes %}{{ metric('innodb_buffer_pool_size', db.buffer_pool_bytes|bytes) }}{% endif %}
+  {% if db.note %}<p class="muted small">{{ db.note }}</p>{% endif %}
+</div>
+<div class="card"><h2>Redis / Cache</h2>
+  {{ metric('memcache.local', d.memcache_local) }}
+  {{ metric('memcache.distributed', d.memcache_distributed) }}
+  {{ metric('memcache.locking', d.memcache_locking) }}
+  {% call metric_html('Redis-Dienst') %}{{ pill(d.redis_service == 'active') }}{% endcall %}
+  {% if redis.configured %}
+    {{ metric('Redis laut config.php', (redis.host or '–') ~ (':' ~ redis.port if redis.port else '') ~ (' · DB ' ~ redis.dbindex if redis.dbindex is not none else '') ~ (' · mit Passwort' if redis.password_set else '')) }}
+    {% call metric_html('Antwort') %}{{ pill(redis.ping == 'PONG', 'PONG', redis.ping or 'unbekannt') }}{% endcall %}
+    {% if redis.version %}{{ metric('Version · Speicher', redis.version ~ ' · ' ~ (redis.used_memory or '–') ~ (' von ' ~ redis.maxmemory if redis.maxmemory and redis.maxmemory != '0B' else '')) }}{% endif %}
+    {% if redis.error %}<p class="muted small">{{ redis.error }}</p>{% endif %}
+  {% else %}<p class="muted">Redis ist in config.php nicht eingetragen.</p>{% endif %}
+  <p class="muted small">Das Redis-Passwort wird nur intern zum Prüfen verwendet und nie angezeigt.</p>
+</div>
+<div class="card"><h2>Hintergrundjobs</h2>
+  {% call metric_html('Zustand') %}{{ pill(cron.ok, 'läuft', 'prüfen') }}{% endcall %}
+  {{ metric('Modus', cron.mode) }}
+  {{ metric('Letzter Lauf', cron.lastcron|ago if cron.lastcron else 'nie / unbekannt') }}
+  {{ metric('Cron-Eintrag (Crontab, /etc/cron.d)', cron.entry or 'kein Eintrag mit cron.php') }}
+  {{ metric('systemd-Timer', cron.timer or 'keiner gefunden') }}
+</div>
+</div>
+{% endblock %}

@@ -1,0 +1,72 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf, metric %}
+{% block body %}
+<div class="card"><h2>Logdatei</h2>
+  {% if data.get('log_type') and data.get('log_type') != 'file' %}
+    <p class="bad">log_type ist „{{ data.get('log_type') }}“ – Nextcloud schreibt nicht in eine Datei. Einträge stehen dann im Journal bzw. Syslog.</p>
+  {% endif %}
+  <div class="dash">
+    <div>
+      {{ metric('Datei', nc.get('path')) }}
+      {{ metric('Größe', nc.size|bytes if nc.get('size') is not none else 'nicht lesbar') }}
+      {{ metric('Rotation', ('ab ' ~ (rotate|bytes) ~ ' – danach wird die Datei zu nextcloud.log.1') if rotate else 'aus – die Datei wächst unbegrenzt') }}
+      {{ metric('Ältere Datei (nextcloud.log.1)', nc.rotated_size|bytes if nc.get('rotated_size') is not none else 'keine') }}
+      {{ metric('Log-Level in config.php', levels.get(loglevel, loglevel)) }}
+      {{ metric('Archivierte Logs', (data.get('archives') or '0') ~ ' im Backup-Verzeichnis (logs/)') }}
+    </div>
+    <div>
+      <form method="post" action="{{ url_for('logs_archive') }}" data-confirm="Nextcloud-Log jetzt komprimiert archivieren und danach leeren?">
+        {{ csrf() }}<p><button class="warn full"{% if running %} disabled{% endif %}>Archivieren und leeren</button></p>
+        <p class="muted small">Kopiert das Log komprimiert ins Backup-Verzeichnis (logs/, nur root lesbar, die letzten 10 bleiben) und leert danach die Datei. Besitzer und Rechte bleiben erhalten.</p>
+      </form>
+      <form method="post" action="{{ url_for('logs_rotate') }}" class="inline-form">
+        {{ csrf() }}<label for="size">Rotation ab</label>
+        <select id="size" name="size">{% for v, label in rotate_choices %}<option value="{{ v }}"{% if v|int == rotate %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+        <button class="small-btn"{% if running %} disabled{% endif %}>Übernehmen</button>
+      </form>
+      <form method="post" action="{{ url_for('logs_level') }}" class="inline-form">
+        {{ csrf() }}<label for="loglevel">Log-Level</label>
+        <select id="loglevel" name="level">{% for n, l in levels.items() %}<option value="{{ n }}"{% if n == loglevel %} selected{% endif %}>{{ l }}{{ ' (Standard)' if n == 2 }}</option>{% endfor %}</select>
+        <button class="small-btn"{% if running %} disabled{% endif %}>Übernehmen</button>
+      </form>
+      <p class="muted small">Debug und Info schreiben sehr viel – nur zur Fehlersuche und danach wieder auf Warnung stellen.</p>
+    </div>
+  </div>
+</div>
+
+<div class="card"><h2>Nextcloud-Log</h2>
+  <form method="get" class="filters">
+    <div><label for="level">Mindest-Level</label><select id="level" name="level">
+      {% for n, l in levels.items() %}<option value="{{ n }}"{% if n == level %} selected{% endif %}>{{ l }}</option>{% endfor %}</select></div>
+    <div><label for="lines">Letzte Zeilen</label><select id="lines" name="lines">
+      {% for n in ['200','500','1000','2000'] %}<option{% if n == lines %} selected{% endif %}>{{ n }}</option>{% endfor %}</select></div>
+    <div><label for="q">Suche</label><input id="q" name="q" value="{{ q }}" placeholder="z.B. App, Fehlertext"></div>
+    <div><button>Anzeigen</button></div>
+  </form>
+  <div class="since-bar">
+    {% if since %}
+      <span class="notice">Es werden nur Einträge seit {{ since|dt }} gezeigt{% if hidden_old %} ({{ hidden_old }} ältere ausgeblendet){% endif %}.</span>
+      <form method="post" action="{{ url_for('logs_since') }}">{{ csrf() }}<input type="hidden" name="mode" value="clear"><input type="hidden" name="level" value="{{ level }}"><input type="hidden" name="lines" value="{{ lines }}"><button class="small-btn">Wieder alle zeigen</button></form>
+    {% endif %}
+    <form method="post" action="{{ url_for('logs_since') }}">{{ csrf() }}<input type="hidden" name="level" value="{{ level }}"><input type="hidden" name="lines" value="{{ lines }}"><button class="small-btn">{{ 'Zeitpunkt neu setzen' if since else 'Nur neue Einträge ab jetzt' }}</button></form>
+    <span class="muted small">Blendet ältere Einträge nur aus – gelöscht wird nichts.</span>
+  </div>
+  {% if err %}<pre>{{ err }}</pre>{% endif %}
+  <p class="muted small">{{ total }} Treffer{% if total > 300 %}, die neuesten 300 angezeigt{% endif %}</p>
+  {% if nc.get('ok') is false %}<p class="bad">{{ nc.get('error') }}</p>{% endif %}
+  {% for e in entries %}
+  <div class="log-entry">
+    <span class="sev lv-{{ e.level }}">{{ levels.get(e.level, '?') }}</span>
+    <span class="meta">{{ e.time }} · {{ e.app }}{% if e.user and e.user != '--' %} · {{ e.user }}{% endif %}{% if e.method %} · {{ e.method }} {{ e.url }}{% endif %}</span>
+    <div class="mono">{{ e.message }}</div>
+    {% if e.exception %}<div class="mono bad">{{ e.exception }}</div>{% endif %}
+  </div>
+  {% else %}{% if not err %}<p class="ok">{{ 'Keine neuen Einträge seit dem gesetzten Zeitpunkt.' if since else 'Keine Einträge für diesen Filter.' }}</p>{% endif %}{% endfor %}
+</div>
+{% for key, title in [('fpm', 'PHP-FPM-Log'), ('web', 'Webserver-Fehlerlog')] %}
+{% set lg = data.get(key) %}
+{% if lg %}<div class="card"><h2>{{ title }}</h2><p class="muted small">{{ lg.path }} · letzte 200 Zeilen</p>
+  <details><summary>Anzeigen</summary><pre>{{ lg.lines|join('\n') if lg.lines else 'leer oder nicht lesbar' }}</pre></details></div>{% endif %}
+{% endfor %}
+{% endblock %}

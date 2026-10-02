@@ -1,6 +1,6 @@
 # Nextcloud Server Manager
 
-**Weboberfläche für die Verwaltung einer selbst gehosteten Nextcloud – Updates, Backups, PHP, Wartung und Logs, ohne für jede Kleinigkeit per SSH `occ` tippen zu müssen.**
+**Weboberfläche, die Prüfung, Backup, Update, PHP-Konfiguration, Wartung und Logs einer selbst gehosteten Nextcloud an einer Stelle bündelt – mit Protokoll jeder Aktion.**
 
 ![Version](https://img.shields.io/badge/version-0.6.3-blue)
 ![Lizenz](https://img.shields.io/badge/lizenz-MIT-green)
@@ -54,8 +54,8 @@ sudo ./install.sh
 Oder direkt aus dem Repository:
 
 ```bash
-git clone https://github.com/<BENUTZER>/nextcloud-server-manager.git
-cd nextcloud-server-manager
+git clone https://github.com/roswitina/nc-manager.git
+cd nc-manager
 sudo ./install.sh
 ```
 
@@ -125,6 +125,12 @@ shellcheck nc-manager-cmd install.sh uninstall.sh
 
 Rückmeldungen, Fehlerberichte und Ideen gerne als [Issue](../../issues) – am besten mit Distribution,
 Nextcloud-Version, Webserver, Datenbank und der Ausgabe aus dem Protokoll.
+
+## Entstehung
+
+Das Projekt wurde mit Unterstützung von KI-Werkzeugen entwickelt. Der vollständige Quellcode liegt in diesem
+Repository und kann vor der Installation geprüft werden. Der Code ist mit automatisierten Tests abgedeckt
+(Web-App, Wrapper, MariaDB und SQLite); Erfahrungen auf anderen Systemen fehlen noch – deshalb Testversion.
 
 ## Lizenz
 

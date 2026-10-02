@@ -1,0 +1,50 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, csrf %}
+{% block body %}
+{% if err %}<div class="card"><pre>{{ err }}</pre></div>{% endif %}
+{% if not info.versions %}<div class="card"><h2>PHP-FPM</h2><p class="muted">Kein laufender PHP-FPM-Dienst erkannt (z.B. Apache mit mod_php).</p></div>{% endif %}
+{% for ver, v in (info.versions or {}).items() %}
+<div class="card"><h2>PHP-FPM {{ ver }}</h2>
+  {{ metric('RAM gesamt / verfügbar', ((info.mem_total_kb)|kb) ~ ' / ' ~ ((info.mem_available_kb)|kb)) }}
+  {% if v.max_children_hits %}
+    <p class="bad">⚠ „pm.max_children erreicht“ steht {{ v.max_children_hits }}× im Log ({{ v.log }}). Besucher mussten dann warten.<br>
+      <span class="small mono">{{ v.max_children_last }}</span></p>
+  {% else %}<p class="ok">✓ Das Prozess-Limit wurde laut Log ({{ v.log }}) nicht erreicht.</p>{% endif %}
+</div>
+{% for pool, p in v.pools.items() %}
+{% set rec, basis = recs[(ver, pool)] %}
+<div class="card"><h3>Pool [{{ pool }}]</h3>
+  <p class="muted small">Dateien: {{ p.files|join(', ') }}</p>
+  <p class="small">Laufende Worker: <b>{{ p.workers }}</b>{% if p.workers %} · Speicher je Worker Ø {{ p.worker_kb_avg|kb }}, max. {{ p.worker_kb_max|kb }} · zusammen {{ p.worker_kb_total|kb }}{% endif %}</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Einstellung</th><th>Aktuell</th><th>Vorschlag</th></tr></thead>
+    <tbody>{% for k in fields %}<tr><td>{{ k }}</td><td>{{ p.config.get(k, '–') }}</td>
+      <td>{{ rec[k] }}{% if p.config.get(k) != rec[k] %} <span class="diff">≠</span>{% endif %}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <p class="muted small">Berechnung: {{ basis.total_mb }} MB RAM · davon ca. {{ basis.other_mb }} MB durch andere Dienste belegt · 15 % Reserve
+    → {{ basis.budget_mb }} MB für PHP ÷ {{ basis.per_proc_mb }} MB je Worker ({{ 'gemessen, mind. 64 MB' if basis.measured else 'geschätzt – keine Worker gemessen' }}).
+    Laufen mehrere Pools oder PHP-Versionen, teilen sie sich dieses Budget.
+    Höchstens 120, damit die Datenbank-Verbindungen reichen (MariaDB max_connections, Standard 151).</p>
+  <form method="post" action="{{ url_for('fpm_set') }}" data-confirm="Vorschlag für Pool {{ pool }} übernehmen und PHP-FPM {{ ver }} neu laden?">
+    {{ csrf() }}<input type="hidden" name="version" value="{{ ver }}"><input type="hidden" name="pool" value="{{ pool }}">
+    {% for k in fields %}<input type="hidden" name="{{ k }}" value="{{ rec[k] }}">{% endfor %}
+    <button{% if running %} disabled{% endif %}>Vorschlag übernehmen</button>
+  </form>
+  <details><summary>Eigene Werte setzen</summary>
+    <form method="post" action="{{ url_for('fpm_set') }}">
+      {{ csrf() }}<input type="hidden" name="version" value="{{ ver }}"><input type="hidden" name="pool" value="{{ pool }}">
+      <div class="fields">{% for k in fields %}
+        <div><label for="{{ pool }}-{{ k }}">{{ k }}</label>
+        {% if k == 'pm' %}<select id="{{ pool }}-{{ k }}" name="pm">{% for o in ['dynamic','ondemand','static'] %}<option{% if p.config.get('pm', 'dynamic') == o %} selected{% endif %}>{{ o }}</option>{% endfor %}</select>
+        {% else %}<input id="{{ pool }}-{{ k }}" name="{{ k }}" value="{{ p.config.get(k, '') }}" maxlength="6" inputmode="numeric">{% endif %}</div>
+      {% endfor %}</div>
+      <p class="muted small">Regel bei pm = dynamic: 1 ≤ min_spare ≤ start ≤ max_spare ≤ max_children. Geschrieben wird nur in {{ v.override }};
+        vor dem Neuladen prüft <code>php-fpm -t</code>, bei Fehlern wird zurückgerollt.</p>
+      <button{% if running %} disabled{% endif %}>Speichern & PHP-FPM neu laden</button>
+    </form>
+  </details>
+</div>
+{% endfor %}
+{% endfor %}
+{% endblock %}

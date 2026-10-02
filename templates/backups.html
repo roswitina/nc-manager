@@ -1,0 +1,46 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf %}
+{% block body %}
+<div class="card">
+  <div class="top"><h2>Backups</h2></div>
+  <p class="muted">Jedes Backup enthält Datenbank, Programmcode und config.php sowie SHA-256-Prüfsummen.
+    Benutzerdaten sind nur in einem <b>Vollbackup</b> enthalten. Aufbewahrt werden die letzten {{ keep }} Backups (NCM_BACKUP_KEEP).</p>
+  <form method="post" action="{{ url_for('backup_create') }}" class="backup-form">
+    {{ csrf() }}
+    <label class="check"><input type="checkbox" name="with_data" value="yes">
+      <span><b>Benutzerdaten mitsichern (Vollbackup).</b> Nextcloud ist dabei im Wartungsmodus, damit Datenbank und Dateien zusammenpassen.
+      Braucht so viel Platz wie das Datenverzeichnis (komprimiert).</span></label>
+    <button{% if running %} disabled{% endif %}>Backup jetzt erstellen</button>
+  </form>
+  {% if err %}<pre>{{ err }}</pre>{% endif %}
+  {% if data.root %}<p class="small">Ziel: <code>{{ data.root }}</code> · frei: {{ data.free|bytes }} von {{ data.total|bytes }}
+    {% if data.legacy_config_copies %}· {{ data.legacy_config_copies }} ältere config.php-Kopien{% endif %}</p>{% endif %}
+</div>
+<div class="card"><h2>Vorhandene Backups</h2>
+  {% for b in data.backups or [] %}
+  <div class="entry">
+    <div class="top">
+      <div>
+        <b>{{ b.name[6:8] }}.{{ b.name[4:6] }}.{{ b.name[:4] }} {{ b.name[9:11] }}:{{ b.name[11:13] }}</b>
+        · Nextcloud {{ b.info.version or '?' }} · {{ b.size|bytes }}
+        {% if b.user_data %}<span class="sev sev-success">mit Benutzerdaten</span>{% else %}<span class="sev sev-info">ohne Benutzerdaten</span>{% endif %}
+        {% if b.verify.ok is sameas true %}<span class="sev sev-success">geprüft {{ b.verify.at|ago }}</span>
+        {% elif b.verify.ok is sameas false %}<span class="sev sev-error">Prüfung fehlgeschlagen</span>
+        {% else %}<span class="sev sev-warning">nicht geprüft</span>{% endif %}
+        {% if not b.complete %}<span class="bad">· unvollständig</span>{% endif %}
+        {% if b.info.reason %}<div class="muted small">Anlass: {{ b.info.reason }}</div>{% endif %}
+        {% for e in b.verify.errors or [] %}<div class="bad small">{{ e }}</div>{% endfor %}
+      </div>
+      <div class="row">
+        <form method="post" action="{{ url_for('backup_verify') }}">{{ csrf() }}<input type="hidden" name="name" value="{{ b.name }}"><button class="small-btn"{% if running %} disabled{% endif %}>Prüfen</button></form>
+        <a class="btn small-btn warn" href="{{ url_for('restore_plan', name=b.name) }}">Wiederherstellen …</a>
+        <form method="post" action="{{ url_for('backup_delete') }}" data-confirm="Backup {{ b.name }} endgültig löschen?">
+          {{ csrf() }}<input type="hidden" name="name" value="{{ b.name }}"><button class="danger small-btn"{% if running %} disabled{% endif %}>Löschen</button></form>
+      </div>
+    </div>
+    <div class="small muted">{% for f in b.files %}{{ f.name }} ({{ f.size|bytes }}){{ ', ' if not loop.last }}{% endfor %}</div>
+  </div>
+  {% else %}<p class="muted">Noch keine Backups vorhanden.</p>{% endfor %}
+</div>
+{% endblock %}

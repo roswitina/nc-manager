@@ -1,0 +1,21 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf %}
+{% block body %}
+<div class="card"><h2>Update-Assistent</h2>
+  <p class="{{ 'ok' if ok else 'bad' }}"><b>{{ 'Vorprüfung erfolgreich' if ok else 'Vorprüfung fehlgeschlagen' }}</b></p>
+  <pre>{{ output }}</pre>
+  <form method="post" action="{{ url_for('update_check') }}">{{ csrf() }}<button{% if running %} disabled{% endif %}>Nach Update suchen</button></form>
+</div>
+<div class="card"><h3>Update starten</h3>
+  <form method="post" action="{{ url_for('update_start') }}" data-confirm="Nextcloud jetzt aktualisieren? Die Instanz ist währenddessen im Wartungsmodus.">
+    {{ csrf() }}
+    <label class="check"><input type="checkbox" name="with_backup" value="yes" checked> Vorher Backup erstellen (Datenbank, Programmcode, config.php) – siehe <a href="{{ url_for('backups_page') }}">Backups</a>.</label>
+    <label class="check"><input type="checkbox" name="with_apps" value="yes"> Danach alle App-Updates installieren.</label>
+    <label class="check"><input type="checkbox" name="backup" value="yes" required> Die Benutzerdaten (Datenverzeichnis) sind extern gesichert bzw. es gibt einen Snapshot.</label>
+    <p class="muted">Das Manager-Backup enthält keine Benutzerdaten. Ohne Manager-Backup wird nur config.php gesichert.
+      Der offizielle Updater springt maximal eine Hauptversion pro Durchlauf.</p>
+    <button class="warn"{% if not ok or running %} disabled{% endif %}>UPDATE STARTEN</button>
+  </form>
+</div>
+{% endblock %}

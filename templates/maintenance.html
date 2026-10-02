@@ -1,0 +1,20 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf %}
+{% block body %}
+<div class="card"><h2>Wartung</h2>
+  <p class="muted">Aktionen laufen im Hintergrund; die Ausgabe erscheint live. Es kann immer nur eine Aktion gleichzeitig laufen.</p>
+  {% for g in groups %}
+  <h3 class="group">{{ g }}</h3>
+  <div class="grid">
+  {% for key, (label, cls, ask, group) in actions.items() if group == g %}
+    <form method="post" action="{{ url_for('run_action', action=key) }}"{% if ask %} data-confirm="{{ ask }}"{% endif %}>
+      {{ csrf() }}<button class="full {{ cls }}"{% if running %} disabled{% endif %}>{{ label }}</button>
+    </form>
+  {% endfor %}
+  </div>
+  {% if g == 'Dateien & Aufräumen' %}<p class="muted small">„abgelaufene löschen“ beachtet die Aufbewahrungsregeln (trashbin_retention_obligation / versions_retention_obligation).
+    Die roten Aktionen löschen ohne Rücksicht auf diese Regeln.</p>{% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% block title %}Lizenz und Haftungsausschluss – Nextcloud Manager{% endblock %}
+{% block body %}
+<div class="card legal">
+  <p class="muted small">Nextcloud Server Manager {{ VERSION }}</p>
+  {{ disclaimer }}
+</div>
+<div class="card"><h2>MIT-Lizenz (rechtlich maßgeblicher Originaltext)</h2><pre>{{ license_text }}</pre></div>
+<p><a href="{{ url_for('home') if session.auth else url_for('login') }}">← zurück</a></p>
+{% endblock %}

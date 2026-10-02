@@ -1,0 +1,34 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import csrf, metric %}
+{% block body %}
+<div class="card"><h2>Wiederherstellen: Backup vom {{ b.name[6:8] }}.{{ b.name[4:6] }}.{{ b.name[:4] }} {{ b.name[9:11] }}:{{ b.name[11:13] }}</h2>
+  {{ metric('Nextcloud-Version im Backup', info.version) }}
+  {{ metric('Benutzerdaten', 'enthalten – werden ebenfalls zurückgespielt' if b.user_data else 'nicht enthalten – bleiben unverändert') }}
+  {{ metric('Letzte Prüfung', ('in Ordnung, ' ~ (ver.at|ago)) if ver.ok is sameas true else ('FEHLGESCHLAGEN' if ver.ok is sameas false else 'noch nie – wird vor dem Restore automatisch durchgeführt')) }}
+  {% if plan %}{{ metric('Ziel', plan.nc_path ~ ' · Daten: ' ~ plan.datadir) }}{% endif %}
+</div>
+<div class="card"><h3>Ablauf</h3>
+  <ol>
+    <li>Backup vollständig prüfen (Prüfsummen, Archive, Datenbank). Bei Fehlern: Abbruch, nichts wird verändert.</li>
+    <li>Prüfen, ob das Backup zu dieser Installation passt und genug Platz frei ist.</li>
+    <li>Sicherheits-Backup des aktuellen Stands (Datenbank + Code) – erscheint danach in der Backup-Liste.</li>
+    <li>Programmcode vorbereiten, Wartungsmodus einschalten.</li>
+    <li>{% if b.user_data %}Benutzerdaten zurückspielen (das bisherige Datenverzeichnis wird umbenannt, nicht gelöscht).{% else %}Benutzerdaten bleiben unverändert.{% endif %}</li>
+    <li>Datenbank zurückspielen – alle Tabellen werden vorher gelöscht. Scheitert der Import, wird automatisch der vorherige Stand eingespielt.</li>
+    <li>Programmcode austauschen (der bisherige wird umbenannt), Wartungsmodus aus.</li>
+  </ol>
+  <p class="muted small">Bei einem Fehler bleibt der Wartungsmodus an, damit niemand mit einem halben Stand arbeitet. Die Ausgabe zeigt dann, was zu tun ist.</p>
+</div>
+{% if problems %}<div class="card">{% for p in problems %}<p class="bad">✗ {{ p }}</p>{% endfor %}</div>{% endif %}
+{% if notes %}<div class="card">{% for n in notes %}<p class="notice">{{ n }}</p>{% endfor %}</div>{% endif %}
+<div class="card">
+  <form method="post" action="{{ url_for('backup_restore') }}" data-confirm="Nextcloud jetzt auf diesen Stand zurücksetzen?">
+    {{ csrf() }}<input type="hidden" name="name" value="{{ b.name }}">
+    <label for="confirm">Zum Bestätigen <b>WIEDERHERSTELLEN</b> eingeben</label>
+    <input id="confirm" name="confirm" autocomplete="off" required pattern="WIEDERHERSTELLEN">
+    <button class="danger"{% if problems or running %} disabled{% endif %}>Wiederherstellung starten</button>
+  </form>
+  <p><a href="{{ url_for('backups_page') }}">← zurück zu den Backups</a></p>
+</div>
+{% endblock %}

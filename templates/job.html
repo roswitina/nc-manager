@@ -1,0 +1,16 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% block body %}
+<div class="card" id="job" data-status="{{ job.status }}" data-url="{{ url_for('job_status', jid=job.id) }}">
+  <h2>{{ job.action|label }}{% if job.args %} <span class="muted">{{ job.args|join(' = ') }}</span>{% endif %}</h2>
+  <p class="muted">Gestartet {{ job.ts|dt }}</p>
+  {% if job.status == 'running' %}
+    <p><span class="pillrun" id="job-state">LÄUFT</span> <span class="muted">Die Seite kann geschlossen werden – die Aktion läuft weiter.</span></p>
+  {% else %}
+    <p class="{{ 'ok' if job.rc == 0 else 'bad' }}"><b>{{ 'ERFOLGREICH' if job.rc == 0 else 'FEHLER' }}</b> · Exit-Code {{ job.rc }} · {{ '%.1f'|format(job.duration or 0) }} s</p>
+  {% endif %}
+  <pre id="job-output">{{ job.output or '(noch keine Ausgabe)' }}</pre>
+  <div class="row"><a class="btn" href="{{ url_for('history') }}">Protokoll</a>
+    {% if back %}<a class="btn" href="{{ back }}">← Zurück</a>{% endif %}</div>
+</div>
+{% endblock %}
