@@ -2,6 +2,28 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.7.0
+
+- **Neue Seite „Webserver“** für Apache und nginx. Sie erkennt den Webserver, den VirtualHost bzw. server-Block der
+  Nextcloud und prüft die Einstellungen, die die Nextcloud-Doku verlangt oder empfiehlt – wie bei PHP mit Ampel,
+  Empfehlung, Grundlage („Doku“ bzw. „Doku-Beispiel“) und Link zum passenden Abschnitt der Doku.
+  - **Apache:** Module (mod_rewrite Pflicht; headers, env, dir, mime, bei PHP-FPM setenvif empfohlen), AllowOverride
+    für den Nextcloud-Ordner, Dav off, HSTS, Weiterleitungen für /.well-known, Pretty URLs, LimitRequestBody,
+    mod_reqtimeout. Erkennt auch Einstellungen, die in einem `<IfModule>` eines nicht geladenen Moduls stehen und
+    deshalb nicht wirken.
+  - **nginx:** client_max_body_size, client_body_timeout, fastcgi_buffers, MIME-Typen für .mjs und .wasm,
+    /.well-known, Sperre der internen Ordner (config, data, lib …), Sicherheits-Header, HSTS, front_controller_active,
+    X-Powered-By, try_files im PHP-Block, gzip, server_tokens; fastcgi_read_timeout und fastcgi_request_buffering
+    werden angezeigt.
+  - **Vorschläge zum Kopieren:** Für jede Abweichung zeigt die Seite die passende Zeile und wo sie hingehört.
+    Der Manager schreibt die Webserver-Konfiguration bewusst nicht selbst.
+  - **Zwei sichere Aktionen:** fehlende Apache-Module aus einer festen Liste einschalten (mit Konfigurationstest und
+    automatischer Rücknahme bei Fehlern) und den Webserver neu laden – nur nach erfolgreichem
+    `apache2ctl configtest` bzw. `nginx -t`.
+- Neue Wrapper-Aktionen `web_info` (nur lesen), `web_enmod` und `web_reload`; neue Helfer-Funktion `web_info`.
+- 8 neue Tests, insgesamt 83. Die 4 Tests gegen echte Webserver laufen nur mit `NCM_TEST_WEBSERVER=1`, weil sie
+  Testdateien nach /etc/apache2 und /etc/nginx schreiben.
+
 ## 0.6.5
 
 - **„Versionen/Papierkorb: abgelaufene löschen“ meldete fälschlich FEHLER.** Steht die Aufbewahrung auf „auto“

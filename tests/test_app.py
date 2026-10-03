@@ -400,6 +400,49 @@ def test_maintenance_page_explains_bigint_and_auto_expiry(client):   # 0.6.5
     assert 'auf „auto“' in html
 
 
+# ------------------------------------------------------------------ v0.7.0: Webserver
+
+def test_webserver_page_shows_checks_docs_and_suggestions(client):
+    login(client)
+    html = client.get('/webserver').get_data(as_text=True)
+    assert 'Apache 2.4.58' in html and 'nginx 1.24.0' in html and 'laufen gleichzeitig' in html
+    assert '<script>alert(1)</script>' not in html and '&lt;script&gt;' in html          # maskiert
+    assert 'Modul mod_rewrite' in html and 'name="module" value="rewrite"' in html        # Knopf zum Einschalten
+    assert 'name="module" value="env"' not in html                                       # geladen -> kein Knopf
+    assert 'AllowOverride All' in html and '/etc/apache2/apache2.conf:170' in html        # Vorschlag + Quelle
+    assert 'wirkt aber nicht' in html                                                    # HSTS im inaktiven IfModule
+    assert 'client_max_body_size 512M;' in html and 'Standard 1m' in html
+    assert 'keine Sperrregel gefunden' in html and 'fehlen: x-robots-tag' in html
+    assert 'docs.nextcloud.com/server/latest/admin_manual/installation/nginx.html' in html
+    assert 'source_installation.html#apache-web-server-configuration' in html
+    assert 'Richtwert' not in html                                                       # Legende nur mit genutzten Grundlagen
+    assert html.count('Testen und neu laden') == 2
+
+
+def test_webserver_actions_validated_and_started(client):
+    login(client)
+    assert post(client, '/webserver', '/webserver/enmod', module='ssl').status_code == 400
+    assert post(client, '/webserver', '/webserver/enmod', module='rewrite;rm').status_code == 400
+    assert post(client, '/webserver', '/webserver/reload', server='lighttpd').status_code == 400
+    r = post(client, '/webserver', '/webserver/enmod', module='headers')
+    assert wait_job(client, r.headers['Location'])['output'] == 'web_enmod headers'
+    r = post(client, '/webserver', '/webserver/reload', server='nginx')
+    assert wait_job(client, r.headers['Location'])['output'] == 'web_reload nginx'
+
+
+def test_web_units(client):
+    import app as appmod
+    assert appmod.web_size('512M') == 512 * 1024 ** 2 and appmod.web_size('1g') == 1024 ** 3
+    assert appmod.web_size('0') == 0 and appmod.web_size('abc') is None
+    assert appmod.web_seconds('300s') == 300 and appmod.web_seconds('5m') == 300 and appmod.web_seconds('60') == 60
+    rows = appmod.web_nginx_checks({'client_max_body_size': {'value': '0', 'src': 'x:1'}, 'primary': {'ssl': True},
+                                    'headers': {'strict-transport-security': 'max-age=100'}}, {}, '/nc')
+    by = {r['title']: r for r in rows}
+    assert by['client_max_body_size']['state'] == 'ok'                       # 0 = unbegrenzt
+    assert by['HSTS (Strict-Transport-Security)']['state'] == 'warn'         # zu kurz
+    assert by['Interne Ordner gesperrt (config, data, lib …)']['state'] == 'bad'
+
+
 def test_restore_needs_typed_confirmation(client):
     login(client)
     t = csrf(client, '/backups/20261002-120000/restore')

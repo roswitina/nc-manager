@@ -79,3 +79,6 @@ ol li{margin:4px 0}
 .since-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .since-bar form{margin:0}
 .since-bar .notice{margin:0;padding:6px 10px}
+.snippet{white-space:pre;overflow-x:auto;font-size:.8rem;margin:6px 0 2px}
+tr.fixrow td{border-top:none;padding-top:0}
+tr.fixrow summary{cursor:pointer;color:#7cb8ff;font-size:.85rem}

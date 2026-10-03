@@ -110,7 +110,7 @@ foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as 
   $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
 }
 $o = [];
-foreach (["datadirectory", "dbtype", "dbhost", "dbname", "memcache.local", "memcache.distributed", "memcache.locking", "logfile", "log_type", "loglevel", "log_rotate_size"] as $k) { $o[$k] = $c[$k] ?? null; }
+foreach (["datadirectory", "dbtype", "dbhost", "dbname", "memcache.local", "memcache.distributed", "memcache.locking", "logfile", "log_type", "loglevel", "log_rotate_size", "htaccess.RewriteBase", "overwrite.cli.url"] as $k) { $o[$k] = $c[$k] ?? null; }
 echo json_encode($o, JSON_UNESCAPED_SLASHES);' -- "$NCM_NC_PATH/config" 2>/dev/null
 }
 
@@ -270,7 +270,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.5"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.7.0"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
@@ -431,6 +431,22 @@ php_ini_dirs() {
     [ -d "/etc/php/$v/fpm/conf.d" ] && echo "/etc/php/$v/fpm/conf.d"
   done
   if apache_modphp && [ -d "/etc/php/$cv/apache2/conf.d" ]; then echo "/etc/php/$cv/apache2/conf.d"; fi
+}
+
+# ---------------------------------------------------------------- Webserver
+# Die Seite „Webserver“ liest nur; ändern darf der Manager allein Apache-Module aus einer festen Liste
+# einschalten und den Webserver nach erfolgreichem Konfigurationstest neu laden.
+WEB_MODULES='rewrite headers env dir mime setenvif'
+web_active() {
+  if [ -d /run/systemd/system ]; then systemctl is-active --quiet "$1"; else pgrep -x "$1" >/dev/null; fi
+}
+web_test() {
+  case "$1" in apache2) apache2ctl configtest 2>&1 ;; nginx) nginx -t 2>&1 ;; *) return 1 ;; esac
+}
+web_reload_service() {
+  if [ -d /run/systemd/system ]; then systemctl reload "$1"
+  else case "$1" in apache2) apache2ctl graceful ;; nginx) nginx -s reload ;; esac
+  fi
 }
 
 php_value_ok() {
@@ -793,6 +809,35 @@ case "$ACTION" in
    done
    if apache_modphp; then systemctl reload apache2 || exit 69; echo 'Neu geladen: apache2'; fi
    echo 'Fertig.' ;;
+
+ web_info)
+   f_web=; tmpfile f_web; helper web_info "$NCM_NC_PATH" >"$f_web"
+   json_out web:jsonfile "$f_web" nc:json "$(nc_config)" nc_path "$NCM_NC_PATH" ;;
+
+ web_enmod)
+   take_lock
+   MOD="${2:-}"
+   case " $WEB_MODULES " in *" $MOD "*) [ -n "$MOD" ] ;; *) false ;; esac || { echo "Modul nicht erlaubt: $MOD (erlaubt: $WEB_MODULES)"; exit 65; }
+   web_active apache2 && command -v a2enmod >/dev/null || { echo 'Apache läuft nicht oder a2enmod fehlt.'; exit 67; }
+   if [ -e "/etc/apache2/mods-enabled/$MOD.load" ]; then echo "Modul $MOD ist bereits eingeschaltet."; exit 0; fi
+   echo "=== Apache-Modul $MOD einschalten ==="
+   a2enmod -q "$MOD" || { echo "FEHLER: a2enmod $MOD fehlgeschlagen."; exit 66; }
+   if ! web_test apache2; then
+     echo 'FEHLER: apache2ctl configtest meldet einen Fehler – Änderung wird zurückgenommen.'
+     a2dismod -q -f "$MOD"; exit 68
+   fi
+   web_reload_service apache2 || { echo 'FEHLER: Apache konnte nicht neu geladen werden.'; exit 69; }
+   echo "Modul $MOD eingeschaltet, Apache neu geladen." ;;
+
+ web_reload)
+   take_lock
+   SRV="${2:-}"
+   case "$SRV" in apache2|nginx) ;; *) echo 'Ungültiger Webserver (apache2 oder nginx)'; exit 65 ;; esac
+   web_active "$SRV" || { echo "$SRV läuft nicht."; exit 67; }
+   echo "=== Konfigurationstest $SRV ==="
+   web_test "$SRV" || { echo 'FEHLER: Konfigurationstest fehlgeschlagen – der Webserver wurde NICHT neu geladen.'; exit 68; }
+   web_reload_service "$SRV" || { echo "FEHLER: $SRV konnte nicht neu geladen werden."; exit 69; }
+   echo "$SRV neu geladen." ;;
 
  *) echo 'Nicht erlaubte Aktion.'; exit 64 ;;
 esac

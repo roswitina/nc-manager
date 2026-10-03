@@ -1,0 +1,170 @@
+{
+ "web": {
+  "servers": [
+   "apache2",
+   "nginx"
+  ],
+  "apache": {
+   "version": "2.4.58",
+   "mpm": "prefork",
+   "modules": [
+    "access_compat_module",
+    "alias_module",
+    "auth_basic_module",
+    "authn_core_module",
+    "authn_file_module",
+    "authz_core_module",
+    "authz_host_module",
+    "authz_user_module",
+    "autoindex_module",
+    "core_module",
+    "deflate_module",
+    "dir_module",
+    "env_module",
+    "filter_module",
+    "http_module",
+    "log_config_module",
+    "logio_module",
+    "mime_module",
+    "mpm_prefork_module",
+    "negotiation_module",
+    "php_module",
+    "reqtimeout_module",
+    "setenvif_module",
+    "so_module",
+    "status_module",
+    "unixd_module",
+    "version_module",
+    "watchdog_module"
+   ],
+   "config": "/etc/apache2/apache2.conf",
+   "error": "",
+   "vhosts": [
+    {
+     "name": "",
+     "port": "80",
+     "ssl": false,
+     "docroot": "/var/www/html",
+     "src": "/etc/apache2/sites-enabled/000-default.conf:1",
+     "nextcloud": false
+    },
+    {
+     "name": "cloud.example.com",
+     "port": "8081",
+     "ssl": false,
+     "docroot": "/var/www/nextcloud",
+     "src": "/etc/apache2/sites-enabled/nextcloud.conf:1",
+     "nextcloud": true
+    }
+   ],
+   "mode": "webroot",
+   "url_path": "/",
+   "primary": {
+    "name": "<script>alert(1)</script>",
+    "ssl": true,
+    "src": "/etc/apache2/sites-enabled/nextcloud.conf:1",
+    "port": "8081"
+   },
+   "allow_override": {
+    "value": "None",
+    "src": "/etc/apache2/apache2.conf:170"
+   },
+   "dav_loaded": false,
+   "dav_off": null,
+   "hsts": null,
+   "hsts_inactive": "/etc/apache2/sites-enabled/nextcloud.conf:13",
+   "wellknown": {
+    "carddav": "",
+    "caldav": ""
+   },
+   "limit_request_body": null,
+   "php_handlers": [
+    "mod_php"
+   ],
+   "http2": false,
+   "reqtimeout": true
+  },
+  "nginx": {
+   "version": "1.24.0",
+   "servers": [
+    {
+     "name": "cloud.example.com",
+     "ssl": false,
+     "root": "",
+     "src": "/etc/nginx/sites-enabled/nextcloud:8",
+     "nextcloud": false
+    },
+    {
+     "name": "cloud.example.com",
+     "ssl": true,
+     "root": "/var/www/nextcloud",
+     "src": "/etc/nginx/sites-enabled/nextcloud:14",
+     "nextcloud": true
+    }
+   ],
+   "mode": "webroot",
+   "primary": {
+    "name": "cloud.example.com",
+    "ssl": true,
+    "http2": true,
+    "src": "/etc/nginx/sites-enabled/nextcloud:14",
+    "file": "/etc/nginx/sites-enabled/nextcloud"
+   },
+   "php_location": "/etc/nginx/sites-enabled/nextcloud:63",
+   "client_max_body_size": null,
+   "client_body_timeout": {
+    "value": "300s",
+    "src": "/etc/nginx/sites-enabled/nextcloud:23"
+   },
+   "gzip": {
+    "value": "on",
+    "src": "/etc/nginx/sites-enabled/nextcloud:25"
+   },
+   "server_tokens": {
+    "value": "off",
+    "src": "/etc/nginx/sites-enabled/nextcloud:20"
+   },
+   "fastcgi_buffers": {
+    "value": "64 4K",
+    "src": "/etc/nginx/sites-enabled/nextcloud:24"
+   },
+   "fastcgi_read_timeout": null,
+   "fastcgi_request_buffering": {
+    "value": "on",
+    "src": "/etc/nginx/sites-enabled/nextcloud:76"
+   },
+   "fastcgi_pass": {
+    "value": "php-handler",
+    "src": "/etc/nginx/sites-enabled/nextcloud:69"
+   },
+   "hide_powered_by": true,
+   "front_controller": {
+    "value": "true",
+    "src": "/etc/nginx/sites-enabled/nextcloud:74"
+   },
+   "try_files_php": true,
+   "headers": {
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "SAMEORIGIN",
+    "x-permitted-cross-domain-policies": "none"
+   },
+   "headers_src": "/etc/nginx/sites-enabled/nextcloud:32",
+   "types": {
+    "mjs": "",
+    "wasm": "application/wasm",
+    "js": "application/javascript",
+    "svg": "image/svg+xml"
+   },
+   "wellknown": {
+    "carddav": "/etc/nginx/sites-enabled/nextcloud:55",
+    "caldav": "/etc/nginx/sites-enabled/nextcloud:56"
+   },
+   "hidden_paths": ""
+  }
+ },
+ "nc": {
+  "htaccess.RewriteBase": null
+ },
+ "nc_path": "/var/www/nextcloud"
+}

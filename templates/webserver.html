@@ -1,0 +1,98 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, csrf %}
+{% block body %}
+{% if err %}<div class="card"><h2>Webserver</h2><pre>{{ err }}</pre></div>{% endif %}
+{% if not cards and not err %}
+<div class="card"><h2>Webserver</h2>
+  <p class="muted">Weder Apache noch nginx laufen auf diesem Server. Liegt ein Reverse-Proxy auf einem anderen Rechner davor,
+    gelten dessen Einstellungen – die kann der Manager nicht prüfen.</p>
+</div>
+{% endif %}
+{% if cards|length > 1 %}
+<div class="card"><p class="muted">Apache und nginx laufen gleichzeitig – meist arbeitet einer als Reverse-Proxy vor dem anderen.
+  Header wie HSTS und Upload-Grenzen müssen dann im vorderen Server passen; geprüft werden beide.</p></div>
+{% endif %}
+{% for c in cards %}{% set f = c.f %}
+<div class="card"><h2>{{ c.label }} {{ f.version }}</h2>
+  {% if f.error %}<p class="bad">⚠ Die Konfiguration konnte nicht gelesen werden:</p><pre>{{ f.error }}</pre>
+  {% else %}
+  {% if c.key == 'apache' %}
+    {{ metric('MPM · PHP-Anbindung', (f.mpm or '–') ~ ' · ' ~ ((f.php_handlers or ['nicht erkannt'])|join(' + ')|replace('fpm', 'PHP-FPM'))) }}
+    {{ metric('HTTP/2', 'aktiv' if f.http2 else 'nicht aktiv') }}
+  {% else %}
+    {{ metric('HTTPS · HTTP/2', ('ja' if (f.primary or {}).ssl else 'nein') ~ ' · ' ~ ('ja' if (f.primary or {}).http2 else 'nein')) }}
+    {{ metric('PHP-Anbindung', (f.fastcgi_pass or {}).value or 'nicht erkannt') }}
+  {% endif %}
+  {% if c.found %}
+    {{ metric('Nextcloud-Bereich', ((f.primary or {}).name or '(ohne Namen)') ~ ' · ' ~ ((f.primary or {}).src or '–')) }}
+    {% if f.mode == 'alias' %}<p class="muted small">Nextcloud liegt unter {{ f.url_path }} (Alias).</p>{% endif %}
+    {% if f.mode == 'subdir' %}<p class="muted small">Nextcloud liegt in einem Unterverzeichnis – einige Prüfungen beziehen sich auf den ganzen server-Block.</p>{% endif %}
+  {% else %}
+    <p class="bad">⚠ Kein {{ 'VirtualHost' if c.key == 'apache' else 'server-Block' }} gefunden, der {{ nc_path }} ausliefert.
+      Geprüft werden nur allgemeine Punkte.</p>
+  {% endif %}
+  <details><summary>Alle {{ 'VirtualHosts' if c.key == 'apache' else 'server-Blöcke' }} ({{ (f.vhosts or f.servers or [])|length }})</summary>
+    <table class="small">{% for v in (f.vhosts or f.servers or []) %}<tr><td>{{ v.name or '(ohne Namen)' }}</td>
+      <td>{{ 'HTTPS' if v.ssl else 'HTTP' }}</td><td class="mono">{{ v.docroot or v.root or '–' }}</td><td class="mono">{{ v.src }}</td>
+      <td>{% if v.nextcloud %}<span class="ok">Nextcloud</span>{% endif %}</td></tr>{% endfor %}</table>
+  </details>
+  {% endif %}
+</div>
+{% if c.rows %}
+<div class="card"><h2>{{ c.label }}: Einstellungen für Nextcloud</h2>
+  <p class="muted">Jede Zeile nennt die Empfehlung, worauf sie beruht, und den passenden Abschnitt der Nextcloud-Doku.
+    Der Manager ändert die Konfiguration nicht selbst – unter „Vorschlag“ steht, was wohin gehört.
+    Danach unten „neu laden“ verwenden: Es lädt nur nach einem erfolgreichen Konfigurationstest.</p>
+  <div class="counts">
+    {% if c.sum.bad %}<span class="sev sev-error">{{ c.sum.bad }} Problem{{ 'e' if c.sum.bad > 1 }}</span>{% endif %}
+    {% if c.sum.warn %}<span class="sev sev-warning">{{ c.sum.warn }} Hinweis{{ 'e' if c.sum.warn > 1 }}</span>{% endif %}
+    <span class="sev sev-success">{{ c.sum.ok }} in Ordnung</span>
+    {% if c.sum.info %}<span class="sev sev-info">{{ c.sum.info }} zur Info</span>{% endif %}
+  </div>
+  <div class="scroll"><table>
+    <thead><tr><th>Prüfung</th><th>Aktuell</th><th>Empfehlung</th><th>Grundlage</th><th></th></tr></thead>
+    <tbody>
+    {% for r in c.rows %}
+      <tr>
+        <td>{{ r.title }}</td>
+        <td>{% if r.state == 'ok' %}<span class="ok">✓</span>{% elif r.state == 'bad' %}<span class="bad">✗</span>{% elif r.state == 'warn' %}<span class="diff">⚠</span>{% else %}<span class="muted">ⓘ</span>{% endif %}
+          {{ r.current }}</td>
+        <td>{{ r.rec }}</td>
+        <td><span class="basis basis-{{ r.basis }}" title="{{ basis[r.basis][1] }}">{{ basis[r.basis][0] }}</span>
+          <div class="small"><a href="{{ r.source[1] }}" target="_blank" rel="noopener noreferrer">{{ r.source[0] }} ↗</a></div>
+          <div class="muted small">{{ r.note }}</div></td>
+        <td>
+          {% if r.action and r.action[0] == 'enmod' %}
+          <form method="post" action="{{ url_for('webserver_enmod') }}" data-confirm="Apache-Modul {{ r.action[1] }} einschalten? Apache wird nach einem erfolgreichen Konfigurationstest neu geladen.">
+            {{ csrf() }}<input type="hidden" name="module" value="{{ r.action[1] }}">
+            <button class="small-btn"{% if running %} disabled{% endif %}>Einschalten</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% if r.fix and r.state != 'ok' and not r.action %}
+      <tr class="fixrow"><td colspan="5">
+        <details><summary>Vorschlag: {{ r.where }}</summary><pre class="snippet">{{ r.fix }}</pre></details>
+      </td></tr>
+      {% endif %}
+    {% endfor %}
+    </tbody>
+  </table></div>
+  <div class="legend small">
+    {% for key, (label, text) in basis.items() if c.rows|selectattr('basis', 'equalto', key)|list %}<div><span class="basis basis-{{ key }}">{{ label }}</span> {{ text }}</div>{% endfor %}
+  </div>
+</div>
+{% endif %}
+{% if not f.error %}
+<div class="card"><h3>{{ c.label }} neu laden</h3>
+  <p class="muted small">Nach einer Änderung an der Konfiguration. Zuerst läuft {{ 'apache2ctl configtest' if c.key == 'apache' else 'nginx -t' }};
+    meldet der Test einen Fehler, bleibt der laufende Webserver unverändert.</p>
+  <form method="post" action="{{ url_for('webserver_reload') }}" data-confirm="Konfiguration testen und {{ c.label }} neu laden?">
+    {{ csrf() }}<input type="hidden" name="server" value="{{ c.service }}">
+    <button{% if running %} disabled{% endif %}>Testen und neu laden</button>
+  </form>
+</div>
+{% endif %}
+{% endfor %}
+{% endblock %}

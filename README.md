@@ -1,4 +1,4 @@
-# Nextcloud Server Manager v0.6.5
+# Nextcloud Server Manager v0.7.0
 
 Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
 
@@ -9,13 +9,13 @@ Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- u
 > Nextcloud ist eine Marke der Nextcloud GmbH; dieses Projekt ist nicht mit ihr verbunden.
 
 Weboberfläche für den Betrieb einer Nextcloud auf Debian, Ubuntu und DietPi:
-Dashboard, Nextcloud-Prüfungen, PHP- und PHP-FPM-Konfiguration, App-Updates, Backups mit Prüfung
+Dashboard, Nextcloud-Prüfungen, PHP- und PHP-FPM-Konfiguration, Webserver-Prüfung (Apache/nginx), App-Updates, Backups mit Prüfung
 und Wiederherstellung, Diagnose, Logs, Wartungsbefehle und Update-Assistent.
 
 ## Installation / Upgrade
 
 ```bash
-tar xzf nc-manager-v0.6.5.tar.gz && cd nc-manager-v0.6.5
+tar xzf nc-manager-v0.7.0.tar.gz && cd nc-manager-v0.7.0
 sudo ./install.sh
 ```
 
@@ -40,6 +40,28 @@ Empfohlen ist **„nur localhost“**. Dann gibt es zwei Wege:
   ```
 
 Die Option „LAN“ funktioniert weiterhin, überträgt Passwort und Sitzung aber unverschlüsselt.
+
+## Änderungen in 0.7.0
+
+- **Neue Seite „Webserver“** für Apache und nginx. Sie erkennt den Webserver, den VirtualHost bzw. server-Block der
+  Nextcloud und prüft die Einstellungen, die die Nextcloud-Doku verlangt oder empfiehlt – wie bei PHP mit Ampel,
+  Empfehlung, Grundlage („Doku“ bzw. „Doku-Beispiel“) und Link zum passenden Abschnitt der Doku.
+  - **Apache:** Module (mod_rewrite Pflicht; headers, env, dir, mime, bei PHP-FPM setenvif empfohlen), AllowOverride
+    für den Nextcloud-Ordner, Dav off, HSTS, Weiterleitungen für /.well-known, Pretty URLs, LimitRequestBody,
+    mod_reqtimeout. Erkennt auch Einstellungen, die in einem `<IfModule>` eines nicht geladenen Moduls stehen und
+    deshalb nicht wirken.
+  - **nginx:** client_max_body_size, client_body_timeout, fastcgi_buffers, MIME-Typen für .mjs und .wasm,
+    /.well-known, Sperre der internen Ordner (config, data, lib …), Sicherheits-Header, HSTS, front_controller_active,
+    X-Powered-By, try_files im PHP-Block, gzip, server_tokens; fastcgi_read_timeout und fastcgi_request_buffering
+    werden angezeigt.
+  - **Vorschläge zum Kopieren:** Für jede Abweichung zeigt die Seite die passende Zeile und wo sie hingehört.
+    Der Manager schreibt die Webserver-Konfiguration bewusst nicht selbst.
+  - **Zwei sichere Aktionen:** fehlende Apache-Module aus einer festen Liste einschalten (mit Konfigurationstest und
+    automatischer Rücknahme bei Fehlern) und den Webserver neu laden – nur nach erfolgreichem
+    `apache2ctl configtest` bzw. `nginx -t`.
+- Neue Wrapper-Aktionen `web_info` (nur lesen), `web_enmod` und `web_reload`; neue Helfer-Funktion `web_info`.
+- 8 neue Tests, insgesamt 83. Die 4 Tests gegen echte Webserver laufen nur mit `NCM_TEST_WEBSERVER=1`, weil sie
+  Testdateien nach /etc/apache2 und /etc/nginx schreiben.
 
 ## Änderungen in 0.6.5
 
@@ -230,8 +252,8 @@ Basis ist 0.5.2. Die Ideen aus dem Entwicklungsstand 0.6.0 sind übernommen, des
 | `jobs.py` | Datenbank und Hintergrund-Jobs |
 | `templates/`, `static/` | HTML-Vorlagen, CSS, JS |
 | `nc-manager-cmd` | einziger per sudo erlaubter Befehl, Whitelist aller Aktionen |
-| `ncm_helper.py` | Auswertungen für den Wrapper (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose); root-eigen unter `/usr/local/lib/nc-manager` |
-| `tests/` | `pip install -r requirements-dev.txt`, dann `python3 -m pytest tests/` – Web-App mit simuliertem Wrapper; echter Wrapper als root (mit MariaDB-Tests, wenn ein Server läuft) |
+| `ncm_helper.py` | Auswertungen für den Wrapper (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose, Webserver-Konfiguration); root-eigen unter `/usr/local/lib/nc-manager` |
+| `tests/` | `pip install -r requirements-dev.txt`, dann `python3 -m pytest tests/` – Web-App mit simuliertem Wrapper; echter Wrapper als root (mit MariaDB-Tests, wenn ein Server läuft; Webserver-Tests nur mit `NCM_TEST_WEBSERVER=1` auf einem Testsystem) |
 
 ## Lizenz
 

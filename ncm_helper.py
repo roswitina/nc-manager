@@ -9,6 +9,7 @@ unter /usr/local/lib/nc-manager/ncm_helper.py.
 Keine Zugangsdaten über Argumente: DB-Zugangsdaten kommen ausschließlich über stdin.
 Kompatibel mit Python 3.9 (Debian 11 / DietPi).
 """
+import fnmatch
 import glob
 import gzip
 import hashlib
@@ -987,9 +988,509 @@ def cmd_ini_sources(keys, *files):
     out(found)
 
 
+
+# ================================================================== Webserver (nur lesen)
+# Ermittelt Fakten zur Apache- bzw. nginx-Konfiguration der Nextcloud. Bewertet wird in der Web-App.
+# Es wird nichts verändert; Konfigurationsdateien werden nur gelesen.
+
+def _norm_path(p):
+    p = str(p or '').strip().strip('"').strip("'")
+    return p.rstrip('/') or '/'
+
+
+def _run_text(cmd, timeout=30):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout, r.stderr
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 127, '', str(e)
+
+
+def _service_active(name):
+    """systemd, wenn vorhanden; sonst (z. B. Container ohne systemd) nach dem Prozess suchen."""
+    if os.path.isdir('/run/systemd/system') and shutil.which('systemctl'):
+        return _run_text(['systemctl', 'is-active', '--quiet', name])[0] == 0
+    return _run_text(['pgrep', '-x', name])[0] == 0
+
+
+def _split_args(s):
+    import shlex
+    try:
+        return shlex.split(s, posix=True)
+    except ValueError:
+        return s.split()
+
+
+# ---------------------------------------------------------------- Apache
+
+def _apache_parse(path, root, depth=0, seen=None):
+    """Liest eine Apache-Konfigurationsdatei samt Include/IncludeOptional als Baum.
+    Knoten: {'d': Direktive (klein), 'a': Argumente, 'f': Datei, 'l': Zeile, 'c': Kinder oder None}."""
+    seen = seen if seen is not None else set()
+    if depth > 20 or path in seen:
+        return []
+    seen = seen | {path}
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            raw = f.read().split('\n')
+    except OSError:
+        return []
+    top = []
+    stack = [top]
+    i = 0
+    while i < len(raw):
+        start = i + 1
+        line = raw[i]
+        while line.endswith('\\') and i + 1 < len(raw):      # Fortsetzungszeilen
+            i += 1
+            line = line[:-1] + ' ' + raw[i]
+        i += 1
+        s = line.strip()
+        if not s or s.startswith('#'):
+            continue
+        if s.startswith('</'):
+            if len(stack) > 1:
+                stack.pop()
+            continue
+        if s.startswith('<') and s.endswith('>'):
+            parts = s[1:-1].strip().split(None, 1)
+            node = {'d': parts[0].lower(), 'a': _split_args(parts[1]) if len(parts) > 1 else [],
+                    'f': path, 'l': start, 'c': []}
+            stack[-1].append(node)
+            stack.append(node['c'])
+            continue
+        parts = s.split(None, 1)
+        d, args = parts[0].lower(), (_split_args(parts[1]) if len(parts) > 1 else [])
+        if d in ('include', 'includeoptional') and args:
+            pat = args[0] if args[0].startswith('/') else os.path.join(root, args[0])
+            targets = []
+            for p in sorted(glob.glob(pat)):
+                if os.path.isdir(p):
+                    targets += sorted(x for x in glob.glob(os.path.join(p, '*')) if os.path.isfile(x))
+                elif os.path.isfile(p):
+                    targets.append(p)
+            for t in targets:
+                stack[-1].extend(_apache_parse(t, root, depth + 1, seen))
+            continue
+        stack[-1].append({'d': d, 'a': args, 'f': path, 'l': start, 'c': None})
+    return top
+
+
+def _apache_module_active(arg, modules):
+    neg = arg.startswith('!')
+    name = arg.lstrip('!')
+    if name.endswith('.c'):
+        base = name[:-2]
+        base = base[4:] if base.startswith('mod_') else base
+        name = base + '_module'
+    if name == 'php_module':
+        active = any(m.startswith('php') and m.endswith('_module') for m in modules)
+    elif name.endswith('_module'):
+        active = name in modules
+    else:
+        return True                       # unbekannte Schreibweise: als aktiv werten
+    return active != neg
+
+
+def _apache_flatten(nodes, modules, all_active=False):
+    """Löst <IfModule> anhand der geladenen Module auf; <IfDefine>/<IfVersion> gelten als aktiv.
+    all_active=True: jeder <IfModule>-Abschnitt gilt (zeigt, was ohne fehlende Module wirken würde)."""
+    res = []
+    for n in nodes:
+        if n['c'] is not None and n['d'] == 'ifmodule':
+            if all_active or (n['a'] and _apache_module_active(n['a'][0], modules)):
+                res.extend(_apache_flatten(n['c'], modules, all_active))
+        elif n['c'] is not None and n['d'] in ('ifdefine', 'ifversion', 'ifdirective', 'iffile', 'ifsection'):
+            res.extend(_apache_flatten(n['c'], modules, all_active))
+        elif n['c'] is not None:
+            res.append(dict(n, c=_apache_flatten(n['c'], modules, all_active)))
+        else:
+            res.append(n)
+    return res
+
+
+def _src(n):
+    return f"{n['f']}:{n['l']}"
+
+
+def _walk(nodes, skip=('virtualhost',)):
+    """Alle Knoten (rekursiv), ohne in die genannten Abschnitte abzusteigen."""
+    for n in nodes:
+        yield n
+        if n['c'] is not None and n['d'] not in skip:
+            yield from _walk(n['c'], skip)
+
+
+def _apache_facts(nc):
+    rc, out_v, err_v = _run_text(['apache2ctl', '-V'])
+    if rc:
+        return {'error': (err_v or out_v).strip()[:2000] or 'apache2ctl -V fehlgeschlagen'}
+    m = re.search(r'Server version:\s*Apache/(\S+)', out_v)
+    mpm = re.search(r'Server MPM:\s*(\S+)', out_v)
+    root = re.search(r'HTTPD_ROOT="([^"]+)"', out_v)
+    conf = re.search(r'SERVER_CONFIG_FILE="([^"]+)"', out_v)
+    root = root.group(1) if root else '/etc/apache2'
+    conf = conf.group(1) if conf else 'apache2.conf'
+    conf = conf if conf.startswith('/') else os.path.join(root, conf)
+    rc, out_m, err_m = _run_text(['apache2ctl', '-M'])
+    modules = sorted(set(re.findall(r'^\s*(\w+_module)\b', out_m, re.M)))
+    facts = {'version': m.group(1) if m else '', 'mpm': (mpm.group(1).lower() if mpm else ''),
+             'modules': modules, 'config': conf, 'error': '' if not rc else (err_m or out_m).strip()[:2000]}
+    raw = _apache_parse(conf, root)
+    tree = _apache_flatten(raw, modules)
+    glob_nodes = list(_walk(tree))
+    vhosts = [n for n in _walk(tree, skip=()) if n['d'] == 'virtualhost']
+
+    def first(nodes, d):
+        for n in nodes:
+            if n['d'] == d and n['c'] is None:
+                return n
+        return None
+
+    def vinfo(v):
+        inner = list(_walk(v['c'], skip=()))
+        dr = first(inner, 'documentroot')
+        sn = first(inner, 'servername')
+        ssl = any(n['d'] == 'sslengine' and n['a'] and n['a'][0].lower() == 'on' for n in inner)
+        port = (v['a'][0].rsplit(':', 1)[-1] if v['a'] else '')
+        aliases = [n for n in inner if n['d'] == 'alias' and len(n['a']) >= 2]
+        return {'node': v, 'inner': inner, 'docroot': _norm_path(dr['a'][0]) if dr and dr['a'] else '',
+                'name': sn['a'][0] if sn and sn['a'] else '', 'ssl': ssl or port == '443', 'port': port,
+                'aliases': aliases, 'src': _src(v)}
+
+    vis = [vinfo(v) for v in vhosts]
+    galias = [n for n in glob_nodes if n['d'] == 'alias' and len(n['a']) >= 2 and _norm_path(n['a'][1]) == nc]
+    matches = []
+    for v in vis:
+        if v['docroot'] == nc:
+            matches.append((v, 'webroot', None))
+        else:
+            al = [a for a in v['aliases'] if _norm_path(a['a'][1]) == nc]
+            if al:
+                matches.append((v, 'alias', al[0]))
+    mode, url_path, primary = None, '', None
+    if matches:
+        matches.sort(key=lambda x: (not x[0]['ssl'],))
+        primary, mode, al = matches[0]
+        url_path = al['a'][0] if al else '/'
+    elif galias:
+        mode, url_path = 'alias', galias[0]['a'][0]
+        sslv = [v for v in vis if v['ssl']]
+        primary = sslv[0] if sslv else (vis[0] if vis else None)
+    facts['vhosts'] = [{'name': v['name'], 'port': v['port'], 'ssl': v['ssl'], 'docroot': v['docroot'], 'src': v['src'],
+                        'nextcloud': any(v is x[0] for x in matches)} for v in vis]
+    facts['mode'] = mode or ''
+    facts['url_path'] = url_path
+    facts['primary'] = ({'name': primary['name'], 'ssl': primary['ssl'], 'src': primary['src'], 'port': primary['port']}
+                        if primary else None)
+    scope = glob_nodes + (primary['inner'] if primary else [])
+
+    # AllowOverride: tiefster passender <Directory>-Abschnitt; bei gleicher Tiefe gewinnt der spätere (VirtualHost).
+    best = None
+    dav_off = None
+    for n in scope:
+        if n['d'] != 'directory' or not n['a'] or n['c'] is None:
+            continue
+        dp = _norm_path(n['a'][0])
+        if any(ch in dp for ch in '*?[~'):
+            continue
+        if not (nc == dp or nc.startswith(dp.rstrip('/') + '/') or dp == '/'):
+            continue
+        for k in n['c']:
+            if k['c'] is None and k['d'] == 'allowoverride' and k['a']:
+                cand = (len(dp), k)
+                if best is None or cand[0] >= best[0]:
+                    best = cand
+            if k['c'] is None and k['d'] == 'dav' and k['a'] and dp == nc:
+                dav_off = k['a'][0].lower() == 'off'
+    facts['allow_override'] = ({'value': ' '.join(best[1]['a']), 'src': _src(best[1])} if best
+                               else {'value': 'None', 'src': 'Apache-Standard'})
+    facts['dav_loaded'] = 'dav_module' in modules
+    facts['dav_off'] = dav_off
+
+    hsts = None
+    for n in scope:
+        if n['c'] is None and n['d'] == 'header' and any(a.lower() == 'strict-transport-security' for a in n['a']):
+            vals = [a for a in n['a'] if 'max-age' in a.lower()]
+            hsts = {'value': vals[0] if vals else ' '.join(n['a']), 'src': _src(n)}
+    facts['hsts'] = hsts
+    if not hsts and primary:
+        # Steht der Header in einem <IfModule>, dessen Modul fehlt? Dann wirkt er nicht.
+        full = _apache_flatten(raw, modules, all_active=True)
+        pv = next((v for v in _walk(full, skip=()) if v['d'] == 'virtualhost' and _src(v) == primary['src']), None)
+        for n in list(_walk(full)) + (list(_walk(pv['c'], skip=())) if pv else []):
+            if n['c'] is None and n['d'] == 'header' and any(a.lower() == 'strict-transport-security' for a in n['a']):
+                facts['hsts_inactive'] = _src(n)
+
+    wk = {}
+    for kind in ('carddav', 'caldav'):
+        hit = next((n for n in scope if n['c'] is None and n['d'] in ('rewriterule', 'redirect', 'redirectmatch',
+                                                                       'redirectpermanent')
+                    and any(f'well-known/{kind}' in a for a in n['a'])), None)
+        wk[kind] = _src(hit) if hit else ''
+    facts['wellknown'] = wk
+
+    lrb = None
+    for n in scope:
+        if n['c'] is None and n['d'] == 'limitrequestbody' and n['a']:
+            lrb = {'value': n['a'][0], 'src': _src(n)}
+    try:
+        with open(os.path.join(nc, '.htaccess'), encoding='utf-8', errors='replace') as f:
+            for i, line in enumerate(f, 1):
+                mm = re.match(r'\s*LimitRequestBody\s+(\d+)', line)
+                if mm:
+                    lrb = {'value': mm.group(1), 'src': f'{nc}/.htaccess:{i}'}
+    except OSError:
+        pass
+    facts['limit_request_body'] = lrb
+
+    handlers = []
+    if any(m.startswith('php') and m.endswith('_module') for m in modules):
+        handlers.append('mod_php')
+    fpm = next((n for n in glob_nodes + [x for v in vis for x in v['inner']]
+                if n['c'] is None and n['d'] == 'sethandler' and n['a'] and n['a'][0].startswith('proxy:')), None)
+    if fpm and 'proxy_fcgi_module' in modules:
+        handlers.append('fpm')
+        facts['fpm_handler'] = {'value': fpm['a'][0], 'src': _src(fpm)}
+    facts['php_handlers'] = handlers
+    proto = [n for n in scope if n['c'] is None and n['d'] == 'protocols']
+    facts['http2'] = bool(proto and 'h2' in proto[-1]['a'] and 'http2_module' in modules)
+    facts['reqtimeout'] = 'reqtimeout_module' in modules
+    return facts
+
+
+# ---------------------------------------------------------------- nginx
+
+def _nginx_tokens(text):
+    """Zerlegt nginx-Konfiguration in (Token, Zeile); Kommentare entfallen, Anführungszeichen werden aufgelöst."""
+    toks, i, line, n = [], 0, 1, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == '\n':
+            line += 1
+            i += 1
+        elif ch.isspace():
+            i += 1
+        elif ch == '#':
+            while i < n and text[i] != '\n':
+                i += 1
+        elif ch in '{};':
+            toks.append((ch, line))
+            i += 1
+        elif ch in '"\'':
+            q, j, buf = ch, i + 1, []
+            while j < n and text[j] != q:
+                if text[j] == '\\' and j + 1 < n:
+                    buf.append(text[j + 1])
+                    j += 2
+                    continue
+                if text[j] == '\n':
+                    line += 1
+                buf.append(text[j])
+                j += 1
+            toks.append((''.join(buf), line))
+            i = j + 1
+        else:
+            j = i
+            while j < n and not text[j].isspace() and text[j] not in '{};':
+                if text[j] == '$' and j + 1 < n and text[j + 1] == '{':     # ${var}
+                    k = text.find('}', j)
+                    j = k + 1 if k > 0 else j + 1
+                    continue
+                j += 1
+            toks.append((text[i:j], line))
+            i = j
+    return toks
+
+
+def _nginx_parse(path, files, prefix, depth=0):
+    text = files.get(path)
+    if text is None:
+        try:
+            with open(path, encoding='utf-8', errors='replace') as f:
+                text = f.read()
+        except OSError:
+            return []
+    toks = _nginx_tokens(text)
+    pos = 0
+
+    def block():
+        nonlocal pos
+        nodes, cur = [], []
+        while pos < len(toks):
+            t, ln = toks[pos]
+            pos += 1
+            if t == ';':
+                if cur:
+                    d = cur[0][0]
+                    args = [x[0] for x in cur[1:]]
+                    if d == 'include' and args and depth < 20:
+                        pat = args[0] if args[0].startswith('/') else os.path.join(prefix, args[0])
+                        names = sorted(set(glob.glob(pat)) | {p for p in files if fnmatch.fnmatch(p, pat)})
+                        for p in names:
+                            nodes.extend(_nginx_parse(p, files, prefix, depth + 1))
+                    else:
+                        nodes.append({'d': d, 'a': args, 'f': path, 'l': cur[0][1], 'c': None})
+                cur = []
+            elif t == '{':
+                d = cur[0][0] if cur else ''
+                node = {'d': d, 'a': [x[0] for x in cur[1:]], 'f': path, 'l': cur[0][1] if cur else ln, 'c': None}
+                node['c'] = block()
+                nodes.append(node)
+                cur = []
+            elif t == '}':
+                return nodes
+            else:
+                cur.append((t, ln))
+        return nodes
+    return block()
+
+
+def _nginx_facts(nc):
+    rc, out_v, err_v = _run_text(['nginx', '-v'])
+    m = re.search(r'nginx/(\S+)', out_v + err_v)
+    facts = {'version': m.group(1) if m else ''}
+    rc, out_t, err_t = _run_text(['nginx', '-T'], timeout=60)
+    if rc:
+        facts['error'] = (err_t or out_t).strip()[:2000] or 'nginx -T fehlgeschlagen'
+        return facts
+    files, cur, buf = {}, None, []
+    for line in out_t.split('\n'):
+        mm = re.match(r'^# configuration file (.+):$', line)
+        if mm:
+            if cur:
+                files[cur] = '\n'.join(buf)
+            cur, buf = mm.group(1), []
+        elif cur:
+            buf.append(line)
+    if cur:
+        files[cur] = '\n'.join(buf)
+    main = next(iter(files), '/etc/nginx/nginx.conf')
+    prefix = os.path.dirname(main)
+    tree = _nginx_parse(main, files, prefix)
+    http = next((n for n in tree if n['d'] == 'http' and n['c'] is not None), {'c': []})
+    servers = [n for n in http['c'] if n['d'] == 'server' and n['c'] is not None]
+
+    def direct(nodes, d):
+        return [n for n in nodes if n['c'] is None and n['d'] == d]
+
+    def last(nodes, d):
+        x = direct(nodes, d)
+        return x[-1] if x else None
+
+    def locations(nodes):
+        for n in nodes:
+            if n['d'] == 'location' and n['c'] is not None:
+                yield n
+                yield from locations(n['c'])
+
+    def sinfo(s):
+        listen = direct(s['c'], 'listen')
+        ssl = any('ssl' in n['a'] or any(a.endswith('443') for a in n['a'][:1]) for n in listen)
+        h2 = any('http2' in n['a'] for n in listen) or any(n['a'][:1] == ['on'] for n in direct(s['c'], 'http2'))
+        root = last(s['c'], 'root')
+        name = last(s['c'], 'server_name')
+        return {'node': s, 'ssl': ssl, 'http2': h2, 'root': _norm_path(root['a'][0]) if root and root['a'] else '',
+                'name': ' '.join(name['a']) if name else '', 'src': _src(s)}
+
+    infos = [sinfo(s) for s in servers]
+    primary, mode, ncloc = None, '', None
+    cands = [(i, 'webroot', None) for i in infos if i['root'] == nc]
+    if not cands:
+        for i in infos:
+            for loc in locations(i['node']['c']):
+                path = loc['a'][-1] if loc['a'] else ''
+                al, rt = last(loc['c'], 'alias'), last(loc['c'], 'root')
+                if (al and al['a'] and _norm_path(al['a'][0]) == nc) or \
+                        (rt and rt['a'] and _norm_path(rt['a'][0] + '/' + path.strip('/')) == nc):
+                    cands.append((i, 'subdir', loc))
+                    break
+    if cands:
+        cands.sort(key=lambda x: (not x[0]['ssl'],))
+        primary, mode, ncloc = cands[0]
+    facts['servers'] = [{'name': i['name'], 'ssl': i['ssl'], 'root': i['root'], 'src': i['src'],
+                         'nextcloud': any(i is c[0] for c in cands)} for i in infos]
+    facts['mode'] = mode
+    if not primary:
+        return facts
+    s = primary['node']['c']
+    facts['primary'] = {'name': primary['name'], 'ssl': primary['ssl'], 'http2': primary['http2'], 'src': primary['src'],
+                        'file': primary['node']['f']}
+    base = ncloc['c'] if ncloc else s
+    php = next((loc for loc in locations(base) if any('\\.php' in a for a in loc['a'])), None)
+    facts['php_location'] = _src(php) if php else ''
+
+    def lookup(d, chain):
+        for nodes in chain:
+            n = last(nodes, d)
+            if n:
+                return {'value': ' '.join(n['a']), 'src': _src(n)}
+        return None
+    srv_chain = ([ncloc['c']] if ncloc else []) + [s, http['c']]
+    php_chain = ([php['c']] if php else []) + srv_chain
+    for d in ('client_max_body_size', 'client_body_timeout', 'gzip', 'server_tokens'):
+        facts[d] = lookup(d, srv_chain)
+    for d in ('fastcgi_buffers', 'fastcgi_read_timeout', 'fastcgi_request_buffering', 'fastcgi_pass'):
+        facts[d] = lookup(d, php_chain)
+    hide = [n for nodes in php_chain for n in direct(nodes, 'fastcgi_hide_header')]
+    facts['hide_powered_by'] = any(n['a'] and n['a'][0].lower() == 'x-powered-by' for n in hide)
+    fcp = {}
+    for nodes in reversed(php_chain):
+        for n in direct(nodes, 'fastcgi_param'):
+            if len(n['a']) >= 2:
+                fcp[n['a'][0]] = {'value': n['a'][1], 'src': _src(n)}
+    facts['front_controller'] = fcp.get('front_controller_active')
+    facts['try_files_php'] = bool(php and direct(php['c'], 'try_files'))
+
+    # add_header: nginx übernimmt Header der äußeren Ebene nur, wenn die innere keine eigenen setzt.
+    headers, hsrc = {}, ''
+    for nodes in srv_chain:
+        hs = direct(nodes, 'add_header')
+        if hs:
+            for n in hs:
+                if len(n['a']) >= 2:
+                    headers[n['a'][0].lower()] = n['a'][1]
+            hsrc = _src(hs[0])
+            break
+    facts['headers'] = headers
+    facts['headers_src'] = hsrc
+    if php and direct(php['c'], 'add_header'):
+        facts['php_location_own_headers'] = True
+
+    types = {}
+    for nodes in (http['c'], s) + ((ncloc['c'],) if ncloc else ()):
+        for n in nodes:
+            if n['d'] == 'types' and n['c'] is not None:
+                for t in n['c']:
+                    for ext in t['a']:
+                        types[ext.lower()] = t['d']
+    facts['types'] = {k: types.get(k, '') for k in ('mjs', 'wasm', 'js', 'svg')}
+    allloc = list(locations(s))
+    text_of = [' '.join(loc['a']) + ' ' + ' '.join(' '.join(k['a']) for k in loc['c'] if k['c'] is None)
+               for loc in allloc]
+    facts['wellknown'] = {k: next((_src(allloc[i]) for i, t in enumerate(text_of) if f'well-known/{k}' in t), '')
+                          for k in ('carddav', 'caldav')}
+    hidden = next((loc for loc in allloc if any('3rdparty' in a and 'config' in a for a in loc['a'])), None)
+    facts['hidden_paths'] = _src(hidden) if hidden else ''
+    return facts
+
+
+def cmd_web_info(nc_path):
+    nc = _norm_path(nc_path)
+    res = {'servers': [], 'apache': None, 'nginx': None}
+    if shutil.which('apache2ctl') and _service_active('apache2'):
+        res['servers'].append('apache2')
+        res['apache'] = _apache_facts(nc)
+    if shutil.which('nginx') and _service_active('nginx'):
+        res['servers'].append('nginx')
+        res['nginx'] = _nginx_facts(nc)
+    out(res)
+
+
 COMMANDS = {
     'fpm_log': cmd_fpm_log, 'backup_verify': cmd_backup_verify, 'backup_info': cmd_backup_info, 'db_restore': cmd_db_restore, 'db_info': cmd_db_info, 'redis_info': cmd_redis_info, 'ini_sources': cmd_ini_sources, 'nc_overrides': cmd_nc_overrides, 'nclog': cmd_nclog, 'textlog': cmd_textlog, 'fpm_info': cmd_fpm_info, 'fpm_write': cmd_fpm_write,
     'db_dump': cmd_db_dump, 'backup_list': cmd_backup_list, 'backup_prune': cmd_backup_prune,
+    'web_info': cmd_web_info,
 }
 
 if __name__ == '__main__':

@@ -488,3 +488,133 @@ def test_expire_auto_is_not_an_error(sim, action, key):
     set_config(sim, **{key: 'kaputt'})                     # echter Fehler bleibt ein Fehler
     r = run(sim, action)
     assert r.returncode == 1 and 'Datenbankfehler' in r.stdout and 'Kein Fehler' not in r.stdout
+
+
+# ------------------------------------------------------------------ v0.7.0: Webserver
+# Diese Tests schreiben Testdateien nach /etc/apache2 und /etc/nginx und laden die Dienste neu.
+# Deshalb laufen sie nur auf ausdrücklichen Wunsch (NCM_TEST_WEBSERVER=1), nie versehentlich auf einem echten Server.
+
+def _web_ready():
+    return (os.environ.get('NCM_TEST_WEBSERVER') == '1' and shutil.which('apache2ctl') and shutil.which('nginx')
+            and subprocess.run(['pgrep', '-x', 'apache2'], capture_output=True).returncode == 0
+            and subprocess.run(['pgrep', '-x', 'nginx'], capture_output=True).returncode == 0)
+
+
+web = pytest.mark.skipif(not _web_ready(), reason='NCM_TEST_WEBSERVER=1 und laufende Apache/nginx nötig')
+A_SITE, N_SITE = '/etc/apache2/sites-enabled/ncm-test.conf', '/etc/nginx/sites-enabled/ncm-test'
+
+
+def _reload():
+    subprocess.run(['apache2ctl', 'graceful'], capture_output=True)
+    subprocess.run(['nginx', '-s', 'reload'], capture_output=True)
+
+
+@pytest.fixture()
+def websim(sim):
+    yield sim
+    for f in (A_SITE, N_SITE, '/etc/apache2/conf-enabled/ncm-test-broken.conf'):
+        if os.path.exists(f):
+            os.unlink(f)
+    _reload()
+
+
+def _write(path, text):
+    with open(path, 'w') as f:
+        f.write(text)
+
+
+def _web_info(s):
+    r = run(s, 'web_info')
+    assert r.returncode == 0, r.stdout + r.stderr
+    return json.loads(r.stdout)
+
+
+@web
+def test_web_info_good_config(websim):
+    nc = websim['nc']
+    _write(A_SITE, f"""<VirtualHost *:18081>
+  ServerName ncm-test.example
+  DocumentRoot {nc}/
+  <Directory {nc}/>
+    Require all granted
+    AllowOverride All
+  </Directory>
+  <IfModule mod_nichtvorhanden.c>
+    Header always set Strict-Transport-Security "max-age=15552000"
+  </IfModule>
+</VirtualHost>
+""")
+    _write(N_SITE, f"""server {{
+    listen 19443;
+    server_name ncm-test.example;
+    root {nc};
+    client_max_body_size 10G;
+    add_header Referrer-Policy "no-referrer" always;
+    include mime.types;
+    types {{ text/javascript mjs; }}
+    location ^~ /.well-known {{
+        location = /.well-known/carddav {{ return 301 /remote.php/dav/; }}
+        location = /.well-known/caldav  {{ return 301 /remote.php/dav/; }}
+    }}
+    location ~ ^/(?:build|tests|config|lib|3rdparty|templates|data)(?:$|/) {{ return 404; }}
+    location ~ \\.php(?:$|/) {{
+        try_files $fastcgi_script_name =404;
+        fastcgi_param front_controller_active true;
+        fastcgi_read_timeout 600s;
+        fastcgi_pass unix:/run/php/x.sock;
+    }}
+}}
+""")
+    _reload()
+    j = _web_info(websim)
+    assert j['nc_path'] == nc and set(j['web']['servers']) == {'apache2', 'nginx'}
+    a, n = j['web']['apache'], j['web']['nginx']
+    assert a['mode'] == 'webroot' and a['primary']['name'] == 'ncm-test.example'
+    assert a['allow_override']['value'] == 'All' and A_SITE in a['allow_override']['src']
+    assert a['hsts'] is None and A_SITE in a['hsts_inactive']          # steht im <IfModule> eines fehlenden Moduls
+    assert n['mode'] == 'webroot' and n['client_max_body_size']['value'] == '10G'
+    assert n['types']['mjs'] == 'text/javascript' and n['wellknown']['carddav'] and n['wellknown']['caldav']
+    assert n['hidden_paths'] and n['try_files_php'] and n['front_controller']['value'] == 'true'
+    assert n['fastcgi_read_timeout']['value'] == '600s' and n['headers'] == {'referrer-policy': 'no-referrer'}
+
+
+@web
+def test_web_info_reports_gaps(websim):
+    nc = websim['nc']
+    _write(A_SITE, f"<VirtualHost *:18081>\n  DocumentRoot {nc}\n</VirtualHost>\n")
+    _write(N_SITE, f"server {{\n    listen 19443;\n    root {nc}/;\n}}\n")
+    _reload()
+    a, n = (lambda w: (w['apache'], w['nginx']))(_web_info(websim)['web'])
+    assert a['mode'] == 'webroot' and a['allow_override']['value'] != 'All'
+    assert n['mode'] == 'webroot' and n['client_max_body_size'] is None and n['hidden_paths'] == ''
+    assert n['wellknown'] == {'carddav': '', 'caldav': ''} and n['php_location'] == ''
+
+
+@web
+def test_web_enmod_validates_and_rolls_back(websim):
+    assert run(websim, 'web_enmod', 'ssl').returncode == 65
+    assert run(websim, 'web_enmod', '').returncode == 65
+    # Eine Zeile, die nur mit mod_headers ausgewertet wird und ungültig ist: Einschalten muss zurückgenommen werden.
+    subprocess.run(['a2dismod', '-q', '-f', 'headers'], capture_output=True)
+    _write('/etc/apache2/conf-enabled/ncm-test-broken.conf', '<IfModule mod_headers.c>\n  Header kaputt\n</IfModule>\n')
+    r = run(websim, 'web_enmod', 'headers')
+    assert r.returncode == 68 and 'zurückgenommen' in r.stdout, r.stdout
+    assert not os.path.exists('/etc/apache2/mods-enabled/headers.load')
+    os.unlink('/etc/apache2/conf-enabled/ncm-test-broken.conf')
+    r = run(websim, 'web_enmod', 'headers')
+    assert r.returncode == 0 and 'eingeschaltet' in r.stdout, r.stdout
+    assert os.path.exists('/etc/apache2/mods-enabled/headers.load')
+    assert run(websim, 'web_enmod', 'headers').stdout.strip().endswith('bereits eingeschaltet.')
+    subprocess.run(['a2dismod', '-q', '-f', 'headers'], capture_output=True)
+
+
+@web
+def test_web_reload_refuses_broken_config(websim):
+    assert run(websim, 'web_reload', 'lighttpd').returncode == 65
+    assert run(websim, 'web_reload', 'nginx').returncode == 0
+    _write(N_SITE, 'server { listen 19443 kaputt; }\n')
+    r = run(websim, 'web_reload', 'nginx')
+    assert r.returncode == 68 and 'NICHT neu geladen' in r.stdout
+    assert subprocess.run(['pgrep', '-x', 'nginx'], capture_output=True).returncode == 0     # läuft weiter
+    os.unlink(N_SITE)
+    assert run(websim, 'web_reload', 'nginx').returncode == 0

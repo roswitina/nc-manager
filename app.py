@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 import jobs
 
-VERSION = '0.6.5'
+VERSION = '0.7.0'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -80,13 +80,17 @@ ACTION_LABELS.update({
     'php_info': 'PHP-Konfiguration',
     'status': 'Status',
     'preflight': 'Update-Vorprüfung',
+    'web_enmod': 'Apache-Modul einschalten',
+    'web_reload': 'Webserver neu laden',
+    'web_info': 'Webserver-Konfiguration',
 })
 # Rücksprung von der Job-Seite
 ACTION_PAGES = {'php_set': 'php_page', 'fpm_set': 'fpm_page', 'app_update': 'apps_page',
                 'app_update_all': 'apps_page', 'backup': 'backups_page', 'backup_delete': 'backups_page',
                 'backup_full': 'backups_page', 'backup_verify': 'backups_page', 'restore_backup': 'backups_page',
                 'log_archive': 'logs_page', 'log_rotate_set': 'logs_page', 'log_level_set': 'logs_page',
-                'nextcloud_update': 'update_wizard', 'update_check': 'update_wizard'}
+                'nextcloud_update': 'update_wizard', 'update_check': 'update_wizard',
+                'web_enmod': 'webserver_page', 'web_reload': 'webserver_page'}
 # Diese Jobs ändern nichts am Zustand, den Setup-Checks/App-Liste beschreiben.
 CACHE_NEUTRAL = {'backup', 'backup_full', 'backup_verify', 'backup_delete', 'update_check', 'log_archive'}
 # Kurzzeit-Cache für häufige, langsame Abfragen (Datei-Cache, gilt für alle Gunicorn-Worker).
@@ -542,6 +546,288 @@ def php_set():
         return render_template('message.html', title='Ungültiger Wert',
                                text=f'„{value}“ ist für {key} nicht zulässig ({hint}).', bad=True), 400
     return start('php_set', [key, value])
+
+
+# --------------------------------------------------------------------------- Webserver (prüfen und erklären)
+
+WEB_SOURCES = {
+    'apache': ('Nextcloud-Doku: Apache-Konfiguration',
+               f'{DOC}/installation/source_installation.html#apache-web-server-configuration'),
+    'apache_more': ('Nextcloud-Doku: Weitere Apache-Einstellungen',
+                    f'{DOC}/installation/source_installation.html#additional-apache-configurations'),
+    'pretty': ('Nextcloud-Doku: Pretty URLs', f'{DOC}/installation/source_installation.html#pretty-urls'),
+    'nginx': ('Nextcloud-Doku: nginx-Konfiguration', f'{DOC}/installation/nginx.html'),
+    'upload': PHP_SOURCES['upload'],
+    'harden': ('Nextcloud-Doku: Server absichern (HSTS)', f'{DOC}/installation/harden_server.html'),
+    'wellknown': ('Nextcloud-Doku: Service Discovery', f'{DOC}/issues/general_troubleshooting.html#service-discovery'),
+}
+WEB_MODULES = ('rewrite', 'headers', 'env', 'dir', 'mime', 'setenvif')     # identisch im Wrapper
+HSTS_MIN = 15552000                    # 180 Tage – Mindestwert der Nextcloud-Prüfung
+NGINX_HEADERS = {'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff',
+                 'x-frame-options': 'SAMEORIGIN', 'x-permitted-cross-domain-policies': 'none',
+                 'x-robots-tag': 'noindex, nofollow'}
+
+
+def web_size(v):
+    """nginx-Größe (512M, 1g, 0) bzw. Bytes in Bytes; None bei unlesbarem Wert."""
+    m = re.fullmatch(r'\s*(\d+)\s*([kKmMgG]?)\s*', str(v or ''))
+    if not m:
+        return None
+    return int(m.group(1)) * {'': 1, 'k': 1024, 'm': 1024 ** 2, 'g': 1024 ** 3}[m.group(2).lower()]
+
+
+def web_seconds(v):
+    m = re.fullmatch(r'\s*(\d+)\s*(ms|s|m|h|d)?\s*', str(v or ''))
+    if not m:
+        return None
+    return int(m.group(1)) * {None: 1, 'ms': 0.001, 's': 1, 'm': 60, 'h': 3600, 'd': 86400}[m.group(2)]
+
+
+def _hsts_age(v):
+    m = re.search(r'max-age\s*=\s*(\d+)', str(v or ''), re.I)
+    return int(m.group(1)) if m else None
+
+
+def _row(title, current, rec, state, basis, source, note='', fix=None, where='', action=None):
+    return dict(title=title, current=current, rec=rec, state=state, basis=basis, source=WEB_SOURCES[source],
+                note=note, fix=fix, where=where, action=action)
+
+
+def _hsts_row(value, src, ssl, inactive_src=''):
+    if not ssl:
+        return _row('HSTS (Strict-Transport-Security)', 'kein HTTPS-Bereich erkannt', f'max-age ≥ {HSTS_MIN}', 'info',
+                    'doku', 'harden', 'HSTS gehört in den HTTPS-Bereich – oder in den Reverse-Proxy, falls '
+                    'HTTPS dort endet. Nextcloud prüft den Header unter „Prüfungen“.')
+    age = _hsts_age(value)
+    if age is None:
+        note = 'Ohne HSTS meldet Nextcloud eine Warnung unter „Prüfungen“.'
+        if inactive_src:
+            note = (f'Der Header steht in {inactive_src}, wirkt aber nicht: Er liegt in einem <IfModule>-Abschnitt, '
+                    'dessen Modul nicht geladen ist (meist mod_headers). ' + note)
+        return _row('HSTS (Strict-Transport-Security)', 'nicht gesetzt', f'max-age ≥ {HSTS_MIN}', 'warn', 'doku',
+                    'harden', note)
+    return _row('HSTS (Strict-Transport-Security)', f'max-age={age}', f'max-age ≥ {HSTS_MIN}',
+                'ok' if age >= HSTS_MIN else 'warn', 'doku', 'harden',
+                f'Gefunden in {src}.' + ('' if age >= HSTS_MIN else ' Nextcloud verlangt mindestens 180 Tage.'))
+
+
+def web_apache_checks(a, nc_cfg, nc_path):
+    rows = []
+    mods = set(a.get('modules') or [])
+    vfile = ((a.get('primary') or {}).get('src') or '').rsplit(':', 1)[0]
+    where = f'in den VirtualHost der Nextcloud ({vfile})' if vfile else 'in den VirtualHost der Nextcloud'
+    fpm = 'fpm' in (a.get('php_handlers') or [])
+    for mod, need, note in [
+            ('rewrite', 'bad', 'Pflicht: ohne mod_rewrite funktionieren die Regeln aus Nextclouds .htaccess nicht '
+                               '(u. a. .well-known, Pretty URLs).'),
+            ('headers', 'warn', 'Empfohlen: setzt Sicherheits-Header aus der .htaccess und HSTS.'),
+            ('env', 'warn', 'Empfohlen: nötig für Pretty URLs.'),
+            ('dir', 'warn', 'Empfohlen.'),
+            ('mime', 'warn', 'Empfohlen: richtige MIME-Typen, u. a. für .mjs-Dateien.'),
+            ('setenvif', 'warn' if fpm else 'info', 'Empfohlen bei PHP-FPM (mod_proxy_fcgi).')]:
+        have = f'{mod}_module' in mods
+        rows.append(_row(f'Modul mod_{mod}', 'geladen' if have else 'fehlt', 'geladen', 'ok' if have else need,
+                         'doku', 'apache_more' if mod != 'rewrite' else 'apache', note,
+                         action=None if have else ('enmod', mod)))
+    if not a.get('primary') and not a.get('mode'):
+        return rows
+    ao = a.get('allow_override') or {}
+    ok = 'all' in ao.get('value', '').lower().split()
+    rows.append(_row('AllowOverride für den Nextcloud-Ordner', ao.get('value', '–'), 'All', 'ok' if ok else 'bad', 'doku',
+                     'apache', f'Quelle: {ao.get("src", "–")}. Ohne „All“ ignoriert Apache Nextclouds .htaccess '
+                     '(Sicherheitsregeln, Weiterleitungen, Header).',
+                     fix=f'<Directory {nc_path}/>\n  Require all granted\n  AllowOverride All\n  Options FollowSymLinks MultiViews\n'
+                         '  <IfModule mod_dav.c>\n    Dav off\n  </IfModule>\n</Directory>', where=where))
+    if a.get('dav_loaded'):
+        rows.append(_row('WebDAV von Apache (Dav off)', 'aus' if a.get('dav_off') else 'nicht abgeschaltet', 'Dav off',
+                         'ok' if a.get('dav_off') else 'warn', 'doku', 'apache',
+                         'mod_dav ist geladen. Für den Nextcloud-Ordner muss es aus sein, Nextcloud bringt eigenes WebDAV mit.',
+                         fix='<IfModule mod_dav.c>\n  Dav off\n</IfModule>', where=f'in den <Directory {nc_path}/>-Abschnitt'))
+    p = a.get('primary') or {}
+    hs = a.get('hsts') or {}
+    rows.append(_hsts_row(hs.get('value'), hs.get('src', ''), p.get('ssl'), a.get('hsts_inactive', '')))
+    if rows[-1]['state'] == 'warn':
+        rows[-1].update(fix='<IfModule mod_headers.c>\n  Header always set Strict-Transport-Security '
+                            f'"max-age={HSTS_MIN}; includeSubDomains"\n</IfModule>',
+                        where='in den HTTPS-VirtualHost (Port 443) der Nextcloud')
+    wk = a.get('wellknown') or {}
+    if a.get('mode') == 'webroot':
+        ok = ok and 'rewrite_module' in mods
+        rows.append(_row('Weiterleitungen /.well-known (CalDAV/CardDAV)', 'über Nextclouds .htaccess' if ok
+                         else '.htaccess wirkt nicht', 'aktiv', 'ok' if ok else 'warn', 'doku', 'wellknown',
+                         'Nextcloud liegt im Wurzelverzeichnis: die .htaccess übernimmt die Weiterleitungen, '
+                         'sofern AllowOverride All und mod_rewrite aktiv sind.'))
+    else:
+        base = (a.get('url_path') or '/nextcloud').rstrip('/')
+        ok = bool(wk.get('carddav') and wk.get('caldav'))
+        rows.append(_row('Weiterleitungen /.well-known (CalDAV/CardDAV)', 'vorhanden' if ok else 'fehlen', 'vorhanden',
+                         'ok' if ok else 'warn', 'doku', 'wellknown',
+                         f'Nextcloud liegt unter {base}/. Die Weiterleitungen müssen dann im Wurzelverzeichnis des '
+                         'Webservers stehen, sonst finden Kalender- und Kontakt-Apps den Server nicht.',
+                         fix='<IfModule mod_rewrite.c>\n  RewriteEngine on\n'
+                             f'  RewriteRule ^/\\.well-known/carddav {base}/remote.php/dav [R=301,L]\n'
+                             f'  RewriteRule ^/\\.well-known/caldav {base}/remote.php/dav [R=301,L]\n</IfModule>',
+                         where='in den VirtualHost, der das Wurzelverzeichnis ausliefert'))
+    rb = (nc_cfg or {}).get('htaccess.RewriteBase')
+    rows.append(_row('Pretty URLs (ohne index.php)', f'htaccess.RewriteBase = {rb}' if rb else 'nicht eingerichtet',
+                     'eingerichtet', 'ok' if rb else 'info', 'doku', 'pretty',
+                     'Optional, aber empfohlen: Adressen ohne „/index.php/“. Braucht mod_env und mod_rewrite.',
+                     fix=None if rb else f"'htaccess.RewriteBase' => '{(a.get('url_path') or '/').rstrip('/') or '/'}',\n"
+                                         "// danach: occ maintenance:update:htaccess ausführen",
+                     where='in config.php (in das $CONFIG-Array)' if not rb else ''))
+    lrb = a.get('limit_request_body')
+    if lrb:
+        cur = 'unbegrenzt' if lrb['value'] == '0' else f'{int(lrb["value"]) // 1048576} MiB'
+        note = f'Gesetzt in {lrb["src"]}.'
+    else:
+        cur, note = 'Apache-Standard (1 GiB ab 2.4.54)', 'Nicht ausdrücklich gesetzt.'
+    rows.append(_row('LimitRequestBody (max. Anfragegröße)', cur, 'groß genug für Uploads ohne Teilstücke', 'info',
+                     'doku', 'upload', note + ' Betrifft nur Programme, die große Dateien in einem Stück hochladen.'))
+    if a.get('reqtimeout'):
+        rows.append(_row('mod_reqtimeout', 'geladen', 'bei Upload-Abbrüchen anpassen', 'info', 'doku', 'upload',
+                         'Kann sehr große Uploads abbrechen. Nur bei Problemen RequestReadTimeout erhöhen oder das Modul abschalten.'))
+    return rows
+
+
+def web_nginx_checks(n, nc_cfg, nc_path):
+    rows = []
+    pfile = (n.get('primary') or {}).get('file', '')
+    where = f'in den server-Block der Nextcloud ({pfile})' if pfile else 'in den server-Block der Nextcloud'
+    php_where = 'in den location-Block für PHP (location ~ \\.php…)'
+
+    def val(k):
+        return (n.get(k) or {}).get('value')
+
+    def src(k):
+        return (n.get(k) or {}).get('src', '')
+
+    cmb = val('client_max_body_size')
+    size = web_size(cmb) if cmb else 1024 ** 2
+    st = 'ok' if size == 0 or (size or 0) >= 512 * 1024 ** 2 else ('bad' if (size or 0) < 100 * 1024 ** 2 else 'warn')
+    rows.append(_row('client_max_body_size', cmb or 'nicht gesetzt (Standard 1m)', '512M', st, 'beispiel', 'nginx',
+                     'Maximale Größe einer Anfrage. Der nginx-Standard von 1 MB lässt größere Uploads scheitern.'
+                     + (f' Quelle: {src("client_max_body_size")}.' if cmb else ''),
+                     fix=None if st == 'ok' else 'client_max_body_size 512M;', where=where))
+    cbt = val('client_body_timeout')
+    secs = web_seconds(cbt) if cbt else 60
+    st = 'ok' if (secs or 0) >= 300 else 'warn'
+    rows.append(_row('client_body_timeout', cbt or 'nicht gesetzt (Standard 60s)', '300s', st, 'beispiel', 'nginx',
+                     'Wartezeit beim Empfang großer Uploads.', fix=None if st == 'ok' else 'client_body_timeout 300s;',
+                     where=where))
+    fb = val('fastcgi_buffers')
+    rows.append(_row('fastcgi_buffers', fb or 'nicht gesetzt', '64 4K', 'ok' if fb else 'warn', 'beispiel', 'nginx',
+                     'Puffer für Antworten von PHP-FPM.', fix=None if fb else 'fastcgi_buffers 64 4K;', where=where))
+    mjs = (n.get('types') or {}).get('mjs', '')
+    ok = mjs in ('text/javascript', 'application/javascript')
+    rows.append(_row('MIME-Typ für .mjs', mjs or 'nicht gesetzt', 'text/javascript', 'ok' if ok else 'bad', 'doku', 'nginx',
+                     'Ohne passenden Typ lädt der Browser JavaScript-Module nicht; Nextcloud meldet das unter „Prüfungen“.',
+                     fix=None if ok else 'include mime.types;\ntypes {\n    text/javascript mjs;\n    application/wasm wasm;\n}',
+                     where=where))
+    wasm = (n.get('types') or {}).get('wasm', '')
+    rows.append(_row('MIME-Typ für .wasm', wasm or 'nicht gesetzt', 'application/wasm', 'ok' if wasm else 'warn', 'doku',
+                     'nginx', 'Für WebAssembly-Dateien einiger Apps.'))
+    wk = n.get('wellknown') or {}
+    ok = bool(wk.get('carddav') and wk.get('caldav'))
+    rows.append(_row('Weiterleitungen /.well-known (CalDAV/CardDAV)', 'vorhanden' if ok else 'fehlen', 'vorhanden',
+                     'ok' if ok else 'warn', 'doku', 'nginx',
+                     'Damit Kalender- und Kontakt-Apps den Server finden. nginx liest keine .htaccess – die Regeln '
+                     'müssen in der nginx-Konfiguration stehen.',
+                     fix=None if ok else 'location ^~ /.well-known {\n    location = /.well-known/carddav { return 301 /remote.php/dav/; }\n'
+                                         '    location = /.well-known/caldav  { return 301 /remote.php/dav/; }\n'
+                                         '    location /.well-known/acme-challenge    { try_files $uri $uri/ =404; }\n'
+                                         '    location /.well-known/pki-validation    { try_files $uri $uri/ =404; }\n'
+                                         '    return 301 /index.php$request_uri;\n}', where=where))
+    hp = n.get('hidden_paths')
+    rows.append(_row('Interne Ordner gesperrt (config, data, lib …)', 'gesperrt' if hp else 'keine Sperrregel gefunden',
+                     'gesperrt', 'ok' if hp else 'bad', 'doku', 'nginx',
+                     'Sicherheit: Ordner wie config/ und data/ dürfen nie direkt abrufbar sein.' + (f' Quelle: {hp}.' if hp else ''),
+                     fix=None if hp else 'location ~ ^/(?:build|tests|config|lib|3rdparty|templates|data)(?:$|/)  { return 404; }\n'
+                                         'location ~ ^/(?:\\.|autotest|occ|issue|indie|db_|console)                { return 404; }',
+                     where=where))
+    hdr = n.get('headers') or {}
+    missing = [k for k in NGINX_HEADERS if k not in hdr]
+    rows.append(_row('Sicherheits-Header', 'vollständig' if not missing else f'fehlen: {", ".join(missing)}',
+                     'alle 5 gesetzt', 'ok' if not missing else 'warn', 'doku', 'nginx',
+                     'Diese Header setzt bei Apache die .htaccess; bei nginx muss die Konfiguration sie liefern.'
+                     + (' Achtung: Der PHP-location-Block setzt eigene add_header-Zeilen – dort gelten die des server-Blocks dann nicht.'
+                        if n.get('php_location_own_headers') else ''),
+                     fix=None if not missing else '\n'.join(
+                         f'add_header {k.title()} "{v}" always;' for k, v in NGINX_HEADERS.items() if k in missing),
+                     where=where))
+    p = n.get('primary') or {}
+    rows.append(_hsts_row(hdr.get('strict-transport-security'), n.get('headers_src', ''), p.get('ssl')))
+    if rows[-1]['state'] == 'warn':
+        rows[-1].update(fix=f'add_header Strict-Transport-Security "max-age={HSTS_MIN}; includeSubDomains" always;',
+                        where=where + ', HTTPS-Teil')
+    fc = (n.get('front_controller') or {}).get('value')
+    rows.append(_row('Pretty URLs (front_controller_active)', fc or 'nicht gesetzt', 'true', 'ok' if fc == 'true' else 'info',
+                     'doku', 'nginx', 'Optional: Adressen ohne „/index.php/“.',
+                     fix=None if fc == 'true' else 'fastcgi_param front_controller_active true;', where=php_where))
+    rows.append(_row('X-Powered-By ausblenden', 'ja' if n.get('hide_powered_by') else 'nein', 'ja',
+                     'ok' if n.get('hide_powered_by') else 'warn', 'doku', 'nginx', 'Verrät sonst die PHP-Version.',
+                     fix=None if n.get('hide_powered_by') else 'fastcgi_hide_header X-Powered-By;', where=where))
+    if n.get('php_location'):
+        ok = n.get('try_files_php')
+        rows.append(_row('Nicht vorhandene PHP-Dateien abweisen', 'ja' if ok else 'nein', 'ja', 'ok' if ok else 'warn',
+                         'doku', 'nginx', 'Verhindert, dass beliebige Pfade an PHP-FPM gehen (bekanntes Sicherheitsrisiko).',
+                         fix=None if ok else 'try_files $fastcgi_script_name =404;', where=php_where))
+    gz = val('gzip')
+    rows.append(_row('gzip', gz or 'aus (Standard)', 'on', 'ok' if gz == 'on' else 'warn', 'doku', 'nginx',
+                     'Komprimiert Textdateien und beschleunigt die Oberfläche.', fix=None if gz == 'on' else 'gzip on;\ngzip_vary on;',
+                     where=where))
+    stk = val('server_tokens')
+    rows.append(_row('server_tokens', stk or 'on (Standard)', 'off', 'ok' if stk == 'off' else 'warn', 'doku', 'nginx',
+                     'Blendet die nginx-Version in Fehlerseiten und Headern aus.',
+                     fix=None if stk == 'off' else 'server_tokens off;', where=where))
+    frt = val('fastcgi_read_timeout')
+    rows.append(_row('fastcgi_read_timeout', frt or 'nicht gesetzt (Standard 60s)', 'nur bei 504-Fehlern erhöhen', 'info',
+                     'doku', 'upload', 'Häufige Lösung für „504 Gateway Timeout“ bei langen Vorgängen.'))
+    frb = val('fastcgi_request_buffering')
+    rows.append(_row('fastcgi_request_buffering', frb or 'nicht gesetzt (Standard on)', 'on', 'info', 'doku', 'nginx',
+                     'Die aktuelle Beispielkonfiguration setzt „on“, weil PHP-FPM keine Chunked-Übertragung unterstützt.'))
+    return rows
+
+
+def web_summary(rows):
+    return {s: sum(1 for r in rows if r['state'] == s) for s in ('ok', 'warn', 'bad', 'info')}
+
+
+@app.get('/webserver')
+@login_required
+def webserver_page():
+    data, err = call_json('web_info')
+    web = data.get('web') or {}
+    nc_cfg = data.get('nc') or {}
+    nc_path = data.get('nc_path') or '/var/www/nextcloud'
+    cards = []
+    for key, label, fn in (('apache', 'Apache', web_apache_checks), ('nginx', 'nginx', web_nginx_checks)):
+        f = web.get(key)
+        if not f:
+            continue
+        rows = [] if f.get('error') else fn(f, nc_cfg, nc_path)
+        cards.append({'key': key, 'service': 'apache2' if key == 'apache' else 'nginx', 'label': label, 'f': f,
+                      'rows': rows, 'sum': web_summary(rows), 'found': bool(f.get('primary') or f.get('mode'))})
+    return render_template('webserver.html', cards=cards, err=err, servers=web.get('servers') or [], basis=PHP_BASIS,
+                           nc_path=nc_path,
+                           running=jobs.running_job_id())
+
+
+@app.post('/webserver/enmod')
+@login_required
+def webserver_enmod():
+    mod = request.form.get('module', '')
+    if mod not in WEB_MODULES:
+        abort(400)
+    return start('web_enmod', [mod])
+
+
+@app.post('/webserver/reload')
+@login_required
+def webserver_reload():
+    srv = request.form.get('server', '')
+    if srv not in ('apache2', 'nginx'):
+        abort(400)
+    return start('web_reload', [srv])
 
 
 # --------------------------------------------------------------------------- Nextcloud-Prüfungen
