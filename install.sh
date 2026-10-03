@@ -5,7 +5,7 @@
 # Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # Installer / Upgrade für den Nextcloud Server Manager.
 set -euo pipefail
-VERSION=0.6.4
+VERSION=0.6.5
 SRC="$(cd "$(dirname "$0")" && pwd)"
 [ "$EUID" -eq 0 ] || { echo 'Bitte als root/sudo starten.'; exit 1; }
 echo "=== Nextcloud Server Manager $VERSION Installer ==="

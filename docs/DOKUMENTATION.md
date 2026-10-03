@@ -1,8 +1,8 @@
-# Nextcloud Server Manager – Programmdokumentation (Version 0.6.3)
+# Nextcloud Server Manager – Programmdokumentation (Version 0.6.5)
 
 Stand: 2. Oktober 2026 · Die PDF-Fassung liegt jedem Release bei.
 
-Der Nextcloud Server Manager (Version 0.6.3) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
+Der Nextcloud Server Manager (Version 0.6.5) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
 
 > **Urheber:** roswitina@hotmail.com · **Lizenz:** MIT · Unentgeltlich und ohne jede Gewährleistung bereitgestellt; die Nutzung erfolgt auf eigenes Risiko. Einzelheiten im Abschnitt „Lizenz und Haftungsausschluss“.
 
@@ -102,12 +102,12 @@ Zugriff aufs Internet braucht der Server nur für die Paketinstallation, die Upd
 
 Die Installation dauert etwa zwei bis fünf Minuten und läuft komplett über das Skript install.sh, das als root gestartet wird.
 
-1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.6.3.tar.gz user@server:`
+1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.6.5.tar.gz user@server:`
 2. Entpacken und ins Verzeichnis wechseln:
 
    ```bash
-   tar xzf nc-manager-v0.6.3.tar.gz
-   cd nc-manager-v0.6.3
+   tar xzf nc-manager-v0.6.5.tar.gz
+   cd nc-manager-v0.6.5
    ```
 3. Installer starten: `sudo ./install.sh`
 4. Die Fragen beantworten (Tabelle unten). Mit Enter wird jeweils die Vorgabe in eckigen Klammern übernommen.
@@ -126,6 +126,7 @@ Die Installation dauert etwa zwei bis fünf Minuten und läuft komplett über da
 | Admin-Benutzer | admin | Benutzername für die Anmeldung (Buchstaben, Ziffern, . \_ @ -) |
 | Backup-Verzeichnis | /var/backups/nc-manager | Ziel der Backups; auf dem Pi am besten ein USB-Laufwerk |
 | Anzahl aufzubewahrender Backups | 3 | Ältere Backups werden nach jedem neuen Backup gelöscht |
+| Nextcloud-Datenverzeichnis | aus config.php | Wird automatisch aus config.php gelesen und festgehalten; nur gefragt, wenn dort keins steht. Bei einem Upgrade mit geändertem Pfad zeigt der Installer alten und neuen Pfad und übernimmt den neuen nur nach Bestätigung mit j |
 | Bestehendes Passwort beibehalten? | J | Nur bei Upgrade; sonst neues Passwort, mindestens 12 Zeichen, zweimal einzugeben |
 | Lizenz und Haftungsausschluss akzeptieren? | N | Wird als Erstes gefragt; ohne j bricht der Installer ab, ohne etwas zu verändern. Unbeaufsichtigte Installation: NCM\_ACCEPT\_LICENSE=ja setzen. |
 
@@ -135,6 +136,7 @@ Die Installation dauert etwa zwei bis fünf Minuten und läuft komplett über da
 - Legt den Systembenutzer `ncmanager` ohne Login-Shell an.
 - Kopiert die Web-App nach /opt/nc-manager und richtet dort eine Python-Umgebung (venv) mit Flask und Gunicorn ein.
 - Installiert den Wrapper /usr/local/sbin/nc-manager-cmd und den Helfer /usr/local/lib/nc-manager/ncm\_helper.py, beide root-eigen, und legt den Hook-Ordner /etc/nc-manager/hooks an.
+- Liest das Datenverzeichnis aus config.php (als Webserver-Benutzer) und hält es als NCM\_DATADIR fest. Der Wrapper vertraut später nur diesem Wert, nicht config.php (Abschnitt Sicherheitskonzept).
 - Schreibt /etc/nc-manager.env (Rechte 600), die sudo-Regel /etc/sudoers.d/ncmanager (geprüft mit visudo) und den Dienst nc-manager.service.
 - Aktiviert und startet den Dienst; startet er nicht, bricht der Installer mit Exit-Code 70 und der Statusausgabe ab.
 - **Self-Test:** prüft Wrapper und occ, die Dashboard-Daten und die Login-Seite. Bei Problemen erscheint eine Warnung mit Details.
@@ -145,10 +147,14 @@ Das Passwort wird über stdin an Python übergeben und als scrypt-Hash gespeiche
 
 Ein Upgrade ist dieselbe Prozedur wie die Installation: neues Archiv entpacken und `sudo ./install.sh` ausführen. Der Installer erkennt die bestehende Installation und schlägt alle bisherigen Einstellungen als Vorgabe vor.
 
-- **Übernommen** werden Benutzername, Passwort-Hash, Secret (bestehende Sitzungen bleiben gültig), Bind-Adresse, Port, Proxy-Einstellung, Backup-Verzeichnis und Aufbewahrungszahl.
+- **Übernommen** werden Benutzername, Passwort-Hash, Secret (bestehende Sitzungen bleiben gültig), Bind-Adresse, Port, Proxy-Einstellung, Backup-Verzeichnis, Aufbewahrungszahl und das festgehaltene Datenverzeichnis.
 - **Ersetzt** werden app.py, jobs.py, templates/, static/, Wrapper und Helfer. Die venv bleibt erhalten, Pakete werden nur aktualisiert.
 - **Protokoll:** Beim ersten Start migriert die App die alte Tabelle aus v0.4.3 automatisch. Reine Lese-Aufrufe wie Dashboard-Abfragen werden dabei verworfen, echte Aktionen bleiben erhalten.
 - **Laufende Aktion:** Der Dienst wird während des Upgrades gestoppt. Ein laufender Hintergrund-Job (z. B. ein Nextcloud-Update) läuft dank KillMode=process trotzdem zu Ende. Besser ist es aber, das Upgrade erst danach zu starten.
+
+**Von 0.6.4 auf 0.6.5:** Keine Besonderheiten, einfach install.sh ausführen.
+
+**Von 0.6.3 auf 0.6.4:** Der Installer hält dabei erstmals das Datenverzeichnis fest. Bis install.sh ausgeführt wurde, lehnen Backup und Wiederherstellung mit dem Hinweis „install.sh erneut ausführen“ ab (Exit-Code 38 bzw. 67). Wer das Datenverzeichnis später verschiebt, führt install.sh danach erneut aus.
 
 Von v0.4.x auf v0.5.x fragt der Installer zusätzlich nach Backup-Verzeichnis und Anzahl der Backups. Backups aus Versionen vor 0.6.1 haben keine Prüfsummen; sie lassen sich weiter prüfen und wiederherstellen, geprüft wird dann nur ihre Struktur. Neue Passwörter müssen seit v0.4.4 mindestens 12 Zeichen haben; ein beibehaltenes kürzeres Passwort funktioniert weiter.
 
@@ -441,7 +447,7 @@ Die Liste zeigt je Backup Zeitpunkt, Nextcloud-Version, Größe, Anlass, „mit/
 Der Assistent zeigt zuerst, was passieren wird und ob etwas dagegen spricht. Gestartet wird erst nach Eingabe von WIEDERHERSTELLEN.
 
 1. Backup vollständig prüfen. Bei Fehlern: Abbruch, nichts wird verändert.
-2. Prüfen, ob das Backup zu dieser Installation gehört (Programm- und Datenpfad) und genug Platz frei ist.
+2. Prüfen, ob das Backup zu dieser Installation gehört (Programm- und Datenpfad), ob das Datenverzeichnis vertrauenswürdig ist (siehe Sicherheitskonzept) und genug Platz frei ist.
 3. Sicherheits-Backup des aktuellen Stands (Datenbank + Code). Es erscheint danach in der Backup-Liste.
 4. Programmcode in einen temporären Ordner entpacken, Wartungsmodus einschalten.
 5. Nur bei Vollbackups: bisheriges Datenverzeichnis umbenennen, Benutzerdaten entpacken.
@@ -450,7 +456,7 @@ Der Assistent zeigt zuerst, was passieren wird und ob etwas dagegen spricht. Ges
 
 Bei einem Fehler bleibt der Wartungsmodus an, damit niemand mit einem halben Stand arbeitet; die Job-Ausgabe sagt, was zu tun ist. Alte Ordner heißen danach `….ncm-before-restore-<Zeit>` und können gelöscht werden, wenn alles läuft.
 
-Der Assistent verweigert die Wiederherstellung, wenn das Backup zu einer anderen Installation gehört, das Datenverzeichnis im Programmordner liegt, das Datenverzeichnis bei einem Vollbackup ein eigener Mountpoint ist oder zu wenig Platz frei ist. Enthält das Backup keine Benutzerdaten, passen seit dem Backup hochgeladene oder gelöschte Dateien nicht mehr zur Datenbank – danach unter Wartung „Alle Dateien neu einlesen“ ausführen.
+Der Assistent verweigert die Wiederherstellung, wenn das Backup zu einer anderen Installation gehört, das Datenverzeichnis in config.php nicht mit dem bei der Installation festgehaltenen übereinstimmt oder die übrigen Prüfungen nicht besteht, das Datenverzeichnis im Programmordner liegt, das Datenverzeichnis bei einem Vollbackup ein eigener Mountpoint ist oder zu wenig Platz frei ist. Enthält das Backup keine Benutzerdaten, passen seit dem Backup hochgeladene oder gelöschte Dateien nicht mehr zur Datenbank – danach unter Wartung „Alle Dateien neu einlesen“ ausführen.
 
 ### Wiederherstellen von Hand (Notfall)
 
@@ -499,17 +505,19 @@ Die Wartungsseite führt einzelne occ-Befehle als Hintergrund-Job aus. Orange Bu
 | Datenbank | Fehlende DB-Indizes | db:add-missing-indices | Wenn die Prüfungen fehlende Indizes melden |
 | Datenbank | Fehlende DB-Spalten | db:add-missing-columns | Wenn die Prüfungen fehlende Spalten melden |
 | Datenbank | Fehlende Primary Keys | db:add-missing-primary-keys | Wenn die Prüfungen fehlende Schlüssel melden |
-| Datenbank | BigInt-Konvertierung (orange) | db:convert-filecache-bigint | Einmalig bei alten Instanzen; kann bei vielen Dateien lange dauern |
+| Datenbank | BigInt-Konvertierung (orange) | db:convert-filecache-bigint | Einmalig bei Instanzen, die vor Nextcloud 13 angelegt wurden (Prüfungen melden „fehlende Big-Int-Spalten“). Stellt ID-Spalten von INT (max. ca. 2,1 Milliarden) auf BIGINT um; kann bei vielen Dateien lange dauern, vorher Backup |
 | Dateien | Alle Dateien neu einlesen (orange) | files:scan --all | Nach Kopieren/Löschen am Dateisystem vorbei oder nach einer Wiederherstellung |
 | Dateien | Verwaiste Datei-Einträge entfernen | files:cleanup | Einträge ohne zugehörigen Speicher, z. B. nach gelöschten Benutzern |
-| Dateien | Papierkorb: abgelaufene löschen | trashbin:expire | Gemäß trashbin\_retention\_obligation; normalerweise erledigt das Cron |
-| Dateien | Versionen: abgelaufene löschen | versions:expire | Gemäß versions\_retention\_obligation; normalerweise erledigt das Cron |
+| Dateien | Papierkorb: abgelaufene löschen | trashbin:expire | Gemäß trashbin\_retention\_obligation; normalerweise erledigt das Cron. Bei „auto“ (Standard) nur ein Hinweis, siehe unten |
+| Dateien | Versionen: abgelaufene löschen | versions:expire | Gemäß versions\_retention\_obligation; normalerweise erledigt das Cron. Bei „auto“ (Standard) nur ein Hinweis, siehe unten |
 | Dateien | Papierkorb ALLER Benutzer leeren (rot) | trashbin:cleanup --all-users | Platzmangel; löscht ohne Rücksicht auf Aufbewahrungsregeln |
 | Dateien | ALLE Dateiversionen löschen (rot) | versions:cleanup | Platzmangel; ältere Versionen sind danach weg |
 | Wartungsmodus | Wartungsmodus EIN (orange) | maintenance:mode --on | Vor Arbeiten an Datenbank oder Dateien; sperrt alle Benutzer |
 | Wartungsmodus | Wartungsmodus AUS | maintenance:mode --off | Nach den Arbeiten bzw. wenn ein Update ihn aktiv gelassen hat |
 
 Alle occ-Befehle laufen als Webserver-Benutzer und mit --no-interaction; Rückfragen von occ werden damit automatisch bestätigt.
+
+**Aufbewahrung „auto“:** Ist trashbin\_retention\_obligation bzw. versions\_retention\_obligation nicht gesetzt oder steht auf „auto“, löscht Nextcloud abgelaufene Einträge selbst (Papierkorb nach 30 Tagen, Versionen nach einem gestaffelten Schema, bei Platzmangel früher). occ beendet sich dann mit Exit-Code 1 und „Auto expiration is configured …“. Der Manager wertet das seit 0.6.5 als Erfolg und zeigt den Hinweis „Kein Fehler“. Manuelles Löschen wirkt nur mit einer festen Regel, z. B. `'versions_retention_obligation' => 'auto, 365'` in config.php.
 
 ### Logs
 
@@ -573,6 +581,7 @@ Alle Einstellungen stehen in /etc/nc-manager.env (nur root lesbar). Nach einer �
 | NCM\_WEBUSER | www-data | Benutzer, unter dem occ läuft |
 | NCM\_BACKUP\_DIR | /var/backups/nc-manager | Ziel der Backups und der Sicherungskopien von PHP-Dateien |
 | NCM\_BACKUP\_KEEP | 3 | Anzahl aufbewahrter Backups (1 bis 999) |
+| NCM\_DATADIR | /var/www/nextcloud/data | Bei der Installation festgehaltenes Nextcloud-Datenverzeichnis. Backup und Wiederherstellung arbeiten nur, wenn datadirectory in config.php genau diesem Wert entspricht. Nach einem Umzug des Datenverzeichnisses install.sh erneut ausführen (oder den Wert hier anpassen) |
 | NCM\_LOG\_ARCHIVE\_KEEP | 10 | Anzahl archivierter Nextcloud-Logs, die behalten werden; ältere werden gelöscht |
 
 Nur für Tests gedacht und im Betrieb nicht gesetzt: NCM\_WRAPPER, NCM\_SUDO, NCM\_STATE\_DIR (Web-App) sowie NCM\_ENV\_FILE, NCM\_LOCK, NCM\_HELPER (Wrapper). Die drei Wrapper-Variablen wirken nur bei direktem Aufruf, nie über sudo.
@@ -657,7 +666,7 @@ Der Manager legt Dateien an genau diesen Stellen an; außerhalb davon verändert
 | /opt/nc-manager/LICENSE.md, HAFTUNGSAUSSCHLUSS.md | ncmanager | Lizenztext und Haftungsausschluss, angezeigt auf der Seite /lizenz |
 | \<Backup-Verzeichnis>/logs/ | root, 700/600 | Archivierte Nextcloud-Logs (nextcloud.log.\<JJJJMMTT-HHMMSS>.gz) |
 
-Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), templates/ (17 Vorlagen), static/ (style.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE.md, HAFTUNGSAUSSCHLUSS.md und docs/DOKUMENTATION.md (diese Dokumentation als Markdown).
+Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), requirements-dev.txt (zusätzlich pytest, nur für Tests), templates/ (18 Vorlagen), static/ (style.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE und LICENSE.md (gleicher Inhalt; das Programm verwendet LICENSE), HAFTUNGSAUSSCHLUSS.md, docs/DOKUMENTATION.md (diese Dokumentation als Markdown) und docs/Nextcloud-Server-Manager-Doku-v.0.6.5.pdf (als PDF).
 
 ## Sicherheitskonzept
 
@@ -674,6 +683,18 @@ Hooks laufen ebenfalls als root. Deshalb führt der Wrapper sie nur aus, wenn Da
 
 **Nextcloud-Log nur als Webserver-Benutzer.** Den Pfad der Logdatei liest der Manager aus config.php. Diese Datei gehört dem Webserver-Benutzer; wer ihn übernimmt, könnte dort z. B. `'logfile' => '/etc/shadow'` eintragen. Würde root die Datei lesen oder leeren, ließe sich so jede Systemdatei auslesen oder zerstören. Deshalb liest, archiviert und leert der Wrapper das Log ausschließlich mit `runuser -u <Webserver-Benutzer>`. Eine Datei, auf die dieser Benutzer nicht schreiben darf, wird abgelehnt (Exit-Code 36) und bleibt unverändert.
 
+**Datenverzeichnis und Datenbank-Angaben aus config.php (seit 0.6.4).** Aus demselben Grund gelten alle Werte aus config.php als nicht vertrauenswürdig, sobald root mit ihnen arbeitet:
+
+- *Datenverzeichnis:* Bei einer Wiederherstellung mit Benutzerdaten verschiebt root das Datenverzeichnis, entpackt das Archiv und setzt den Besitzer mit `chown -R` auf den Webserver-Benutzer. Ein manipulierter Eintrag wie `'datadirectory' => '/etc'` hätte so `/etc` dem Webserver-Benutzer übereignet und damit Root-Rechte verschafft. Deshalb hält der Installer das Datenverzeichnis in /etc/nc-manager.env fest (NCM\_DATADIR, nur für root lesbar). Backup und Wiederherstellung verwenden es nur, wenn
+  1. datadirectory in config.php genau diesem Wert entspricht,
+  2. es ein absoluter Pfad ohne `.`, `..` oder `//` ist und kein Systemverzeichnis (z. B. /, /etc, /usr, /root, /boot, /var),
+  3. es existiert und kein symbolischer Link ist,
+  4. es dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält,
+  5. weder der Programmordner noch das Backup-Verzeichnis darin liegen.
+
+  Sonst bricht die Aktion ab, bevor etwas verändert wird (Exit-Code 38 beim Backup, 67 bei der Wiederherstellung); die Seite „Wiederherstellen“ nennt den Grund. Auch für SQLite verwendet der Helfer das festgehaltene Verzeichnis, nicht das aus config.php.
+- *Datenbank-Angaben:* Host, Port, Datenbankname, Benutzer und Passwort prüft der Helfer, bevor er mysqldump, mariadb, pg\_dump oder psql startet. Abgelehnt werden Steuerzeichen wie Zeilenumbrüche (damit ließen sich sonst zusätzliche Zeilen wie `result-file=` in die MySQL-Optionsdatei schreiben, und root würde dorthin schreiben), Werte mit führendem `-` (würden als Programm-Option gelesen), Ports, die keine Zahl sind, und SQLite-Datenbanknamen mit anderen Zeichen als Buchstaben, Ziffern, `.`, `_` und `-`.
+
 ### Eingaben
 
 Jede Eingabe wird zweimal geprüft: in der Web-App und noch einmal im Wrapper bzw. Helfer.
@@ -686,6 +707,8 @@ Jede Eingabe wird zweimal geprüft: in der Web-App und noch einmal im Wrapper bz
 | Backup-Name | genau JJJJMMTT-HHMMSS, Ordner muss existieren |
 | Wiederherstellung | zusätzlich die eingetippte Bestätigung WIEDERHERSTELLEN |
 | Update-Optionen | nur „backup“ und „apps“ |
+| Datenverzeichnis aus config.php | nur der bei der Installation festgehaltene Pfad, plus Plausibilitätsprüfungen (siehe oben) |
+| Datenbank-Angaben aus config.php | keine Steuerzeichen, kein führendes „-“, Port nur Ziffern, SQLite-Name nur Buchstaben/Ziffern/.\_- |
 
 Befehle werden immer als Argumentliste aufgerufen, nie über eine Shell-Zeichenkette.
 
@@ -730,8 +753,13 @@ Die erste Anlaufstelle ist immer die Ausgabe des Jobs (Protokoll) bzw. das Journ
 | Backup: „Access denied“ | DB-Benutzer aus config.php darf nicht dumpen | Rechte prüfen: SELECT, SHOW VIEW, TRIGGER, LOCK TABLES auf die Nextcloud-DB |
 | Prüfung: „wurde verändert oder ist beschädigt“ | Datei im Backup nachträglich geändert oder Speicherfehler | Backup nicht verwenden; Datenträger prüfen, neues Backup erstellen |
 | Prüfung: „Dump ist unvollständig“ | Dump wurde abgebrochen oder abgeschnitten (z. B. Platte voll) | Neues Backup erstellen, freien Platz prüfen |
+| Backup/Wiederherstellung: „Datenverzeichnis in config.php … weicht … ab“ | Datenverzeichnis wurde verschoben – oder config.php wurde manipuliert | Selbst verschoben: `sudo ./install.sh` erneut ausführen und den neuen Pfad bestätigen. Sonst config.php prüfen und den Server auf einen Einbruch untersuchen |
+| Backup/Wiederherstellung: „NCM\_DATADIR fehlt“ | Upgrade auf 0.6.4 ohne erneuten Lauf von install.sh | `sudo ./install.sh` ausführen |
+| Backup/Wiederherstellung: „.ocdata fehlt“ oder „gehört … nicht“ | Falscher Pfad festgehalten oder Rechte im Datenverzeichnis falsch | Pfad in /etc/nc-manager.env prüfen; `ls -la <Datenverzeichnis>`, Besitzer muss der Webserver-Benutzer sein |
+| Backup: „… enthält Steuerzeichen“ oder „darf nicht mit "-" beginnen“ | Ungewöhnliche oder manipulierte Datenbank-Angaben in config.php | config.php prüfen; Passwörter mit Zeilenumbruch sind nicht zulässig |
 | Wiederherstellung verweigert: Mountpoint | Datenverzeichnis ist ein eigenes Laufwerk | Benutzerdaten von Hand zurückspielen (WIEDERHERSTELLEN.txt) |
 | Nach Wiederherstellung im Wartungsmodus | Ein Schritt ist gescheitert; der Assistent lässt den Wartungsmodus bewusst an | Job-Ausgabe lesen; Sicherheits-Backup und .ncm-before-restore-Ordner liegen bereit |
+| „Versionen/Papierkorb: abgelaufene löschen“ meldet „Auto expiration is configured“ | Aufbewahrung steht auf „auto“ (Standard) | Kein Fehler; Nextcloud räumt selbst auf. Bis 0.6.4 erschien das fälschlich als FEHLER mit Exit-Code 1 |
 | Diagnose: Redis „Connection refused“ | Redis läuft nicht oder Host/Port/Socket in config.php falsch | `systemctl status redis-server`; Eintrag redis in config.php prüfen |
 | Hook wird nicht ausgeführt | Datei oder Ordner für Gruppe/Andere beschreibbar oder nicht root-eigen | `sudo chown root: <Datei>; sudo chmod 700 <Datei>` |
 | PHP-Wert wirkt nicht | Eine später geladene INI-Datei oder Nextclouds .user.ini/.htaccess überschreibt ihn | „Wo stehen die Werte?“ und Spalte „Aktuell (Web)“ auf der PHP-Seite |
@@ -763,10 +791,11 @@ Die erste Anlaufstelle ist immer die Ausgabe des Jobs (Protokoll) bzw. das Journ
 | 35 | Backup: Prüfsummen nicht erstellbar |
 | 36 | Log archivieren: Logdatei fehlt oder ist für den Webserver-Benutzer nicht beschreibbar (nichts verändert) |
 | 37 | Log archivieren: Archiv erstellt, aber Logdatei konnte nicht geleert werden |
+| 38 | Backup: Datenverzeichnis nicht vertrauenswürdig (weicht vom festgehaltenen ab, NCM\_DATADIR fehlt oder Prüfung nicht bestanden) – nichts verändert |
 | 64 | Unbekannte Aktion |
 | 65 | Ungültiges Argument (Wert, App-ID, Backup-Name, Pool, Version) |
 | 66 | PHP-FPM: Werte abgelehnt · Wiederherstellung: Backup-Prüfung fehlgeschlagen (nichts verändert) |
-| 67 | PHP: keine conf.d-Verzeichnisse · Wiederherstellung: Voraussetzung nicht erfüllt (nichts verändert) |
+| 67 | PHP: keine conf.d-Verzeichnisse · Wiederherstellung: Voraussetzung nicht erfüllt, z. B. Datenverzeichnis nicht vertrauenswürdig (nichts verändert) |
 | 68 | PHP: Konfigurationstest fehlgeschlagen, zurückgerollt · Wiederherstellung: Sicherheits-Backup oder Wartungsmodus fehlgeschlagen |
 | 69 | PHP: Reload fehlgeschlagen · Wiederherstellung: Datenbank-Import fehlgeschlagen (vorheriger Stand wird automatisch eingespielt) |
 | 70 | Installer: Dienst startet nicht · Wiederherstellung: Programmcode nicht entpackbar (nichts verändert) |
@@ -796,12 +825,12 @@ Ein laufender Job wird dabei beendet. Vom Manager gesetzte PHP- und Pool-Werte b
 Die Web-App ist eine Flask-Anwendung mit Jinja2-Vorlagen; die Root-Seite ist ein Bash-Skript plus Python-Helfer. Die Tests laufen ohne Nextcloud und ohne root mit einem simulierten Wrapper.
 
 ```bash
-pip install 'flask>=3,<4' pytest
-python3 -m pytest tests/          # 61 Tests (Wrapper-Tests nur als root mit PHP, MariaDB-Tests nur mit laufendem Server)
+pip install -r requirements-dev.txt
+python3 -m pytest tests/          # 76 Tests (Wrapper-Tests nur als root mit PHP, MariaDB-Tests nur mit laufendem Server)
 shellcheck nc-manager-cmd install.sh uninstall.sh
 ```
 
-Die Web-App-Tests decken Anmeldung, Sperre, CSRF, Escaping, Security-Header, Hintergrund-Jobs, Eingabeprüfung, alle Seiten und die Empfehlungslogik ab. Die Wrapper-Tests laufen gegen eine simulierte Nextcloud mit echtem PHP: große Logs, keine Geheimnisse in Ausgaben, Backup mit Prüfsummen, Erkennen manipulierter und abgeschnittener Backups, Vollbackup, Wiederherstellung mit SQLite, Ablehnen fremder und beschädigter Backups, Hooks und – mit lokalem MariaDB-Server – das Entfernen neuerer Tabellen sowie das automatische Zurückspielen nach einem gescheiterten Import.
+Die Web-App-Tests decken Anmeldung, Sperre, CSRF, Escaping, Security-Header, Hintergrund-Jobs, Eingabeprüfung, alle Seiten und die Empfehlungslogik ab. Die Wrapper-Tests laufen gegen eine simulierte Nextcloud mit echtem PHP: große Logs, keine Geheimnisse in Ausgaben, Backup mit Prüfsummen, Erkennen manipulierter und abgeschnittener Backups, Vollbackup, Wiederherstellung mit SQLite, Ablehnen fremder und beschädigter Backups, Hooks, die Aufbewahrung „auto“ bei versions:expire und trashbin:expire, das Ablehnen eines manipulierten Datenverzeichnisses und eingeschleuster Datenbank-Angaben und – mit lokalem MariaDB-Server – das Entfernen neuerer Tabellen sowie das automatische Zurückspielen nach einem gescheiterten Import.
 
 ### Neue Aktion hinzufügen
 
@@ -851,6 +880,8 @@ Diese Python-Pakete lädt der Installer aus PyPI; sie sind nicht Teil des Archiv
 
 | Version | Wichtigste Änderungen |
 | --- | --- |
+| 0.6.5 | „Versionen/Papierkorb: abgelaufene löschen“ meldet bei Aufbewahrung „auto“ keinen Fehler mehr; Erklärtext zur BigInt-Konvertierung auf der Wartungsseite; requirements-dev.txt |
+| 0.6.4 | Sicherheit: Werte aus config.php gelten als nicht vertrauenswürdig. Das Datenverzeichnis wird bei der Installation festgehalten und vor Backup und Wiederherstellung geprüft; Datenbank-Angaben werden auf Steuerzeichen und eingeschleuste Optionen geprüft; Wiederherstellungsseite zeigt den Grund einer Ablehnung |
 | 0.6.3 | Logs: archivieren und leeren (Besitzer und Rechte bleiben), Größe und Rotation anzeigen und einstellen, Log-Level einstellen, „nur neue Einträge ab jetzt“; Nextcloud-Log wird als Webserver-Benutzer gelesen |
 | 0.6.2 | Urheberangabe, MIT-Lizenz und Gewährleistungs- und Haftungsausschluss; Lizenzhinweise in allen Quelldateien; Bestätigung im Installer; Fußzeile und Seite /lizenz; funktional wie 0.6.1 |
 | 0.6.1 | Backups mit Prüfsummen und optional mit Benutzerdaten; Prüfung als Job mit echtem Abgleich; geführte Wiederherstellung mit Sicherheits-Backup und automatischem Zurückspielen; Diagnose-Seite (Datenbank, Redis, Cron); INI-Fundstellen; Hooks; erweiterte Vorprüfung; Self-Test im Installer; systemd ohne ProtectHome |

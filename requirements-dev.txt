@@ -1,0 +1,3 @@
+# Nur für Entwicklung und Tests – wird vom Installer nicht verwendet.
+-r requirements.txt
+pytest

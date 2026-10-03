@@ -47,6 +47,21 @@ runocc() {
   fi
 }
 
+# versions:expire und trashbin:expire enden mit Exit 1 und „Auto expiration is configured …“, wenn die
+# Aufbewahrung auf „auto“ steht (Standard). Das ist kein Fehler: Nextcloud räumt dann selbst über die
+# Hintergrundjobs auf. Ausgabe bleibt live sichtbar (tee).
+run_expire() {
+  local f rc
+  tmpfile f
+  runocc "$@" 2>&1 | tee "$f"; rc=${PIPESTATUS[0]}
+  if [ "$rc" != 0 ] && grep -q 'Auto expiration is configured' "$f"; then
+    echo 'HINWEIS: Kein Fehler – die Aufbewahrung steht auf „auto“ (Nextcloud-Standard). Nextcloud löscht'
+    echo 'abgelaufene Einträge dann selbst über die Hintergrundjobs; manuell ist nichts zu tun.'
+    return 0
+  fi
+  return "$rc"
+}
+
 # Nur eine ändernde Aktion gleichzeitig (Update, Repair, PHP …).
 take_lock() {
   exec 9>"$LOCK"
@@ -255,7 +270,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.4"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.6.5"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
@@ -722,8 +737,8 @@ case "$ACTION" in
 
  files_scan)       take_lock; runocc files:scan --all ;;
  files_cleanup)    take_lock; runocc files:cleanup ;;
- trashbin_expire)  take_lock; runocc trashbin:expire ;;
- versions_expire)  take_lock; runocc versions:expire ;;
+ trashbin_expire)  take_lock; run_expire trashbin:expire ;;
+ versions_expire)  take_lock; run_expire versions:expire ;;
  trashbin_cleanup) take_lock; runocc trashbin:cleanup --all-users ;;
  versions_cleanup) take_lock; runocc versions:cleanup ;;
 

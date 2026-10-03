@@ -13,7 +13,12 @@
     </form>
   {% endfor %}
   </div>
+  {% if g == 'Datenbank' %}<p class="muted small"><strong>BigInt-Konvertierung:</strong> stellt ID-Spalten (z. B. der Dateitabelle)
+    von INT auf BIGINT um. INT reicht für rund 2,1 Milliarden Einträge – jede Datei, Vorschau und Version verbraucht eine Nummer,
+    die nie wiederverwendet wird. Nötig nur bei Installationen, die vor Nextcloud 13 angelegt wurden; die Prüfungen melden dann
+    „fehlende Big-Int-Spalten“. Einmalig ausführen, vorher Backup.</p>{% endif %}
   {% if g == 'Dateien & Aufräumen' %}<p class="muted small">„abgelaufene löschen“ beachtet die Aufbewahrungsregeln (trashbin_retention_obligation / versions_retention_obligation).
+    Steht eine Regel auf „auto“ (Nextcloud-Standard), räumt Nextcloud selbst über die Hintergrundjobs auf; die Aktion meldet dann nur einen Hinweis.
     Die roten Aktionen löschen ohne Rücksicht auf diese Regeln.</p>{% endif %}
   {% endfor %}
 </div>

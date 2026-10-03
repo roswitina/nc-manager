@@ -1,4 +1,4 @@
-# Nextcloud Server Manager v0.6.4
+# Nextcloud Server Manager v0.6.5
 
 Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
 
@@ -15,7 +15,7 @@ und Wiederherstellung, Diagnose, Logs, Wartungsbefehle und Update-Assistent.
 ## Installation / Upgrade
 
 ```bash
-tar xzf nc-manager-v0.6.4.tar.gz && cd nc-manager-v0.6.4
+tar xzf nc-manager-v0.6.5.tar.gz && cd nc-manager-v0.6.5
 sudo ./install.sh
 ```
 
@@ -40,6 +40,18 @@ Empfohlen ist **„nur localhost“**. Dann gibt es zwei Wege:
   ```
 
 Die Option „LAN“ funktioniert weiterhin, überträgt Passwort und Sitzung aber unverschlüsselt.
+
+## Änderungen in 0.6.5
+
+- **„Versionen/Papierkorb: abgelaufene löschen“ meldete fälschlich FEHLER.** Steht die Aufbewahrung auf „auto“
+  (Nextcloud-Standard), beenden sich `occ versions:expire` und `occ trashbin:expire` mit Exit-Code 1 und dem Hinweis
+  „Auto expiration is configured …“. Das ist kein Fehler: Nextcloud räumt dann selbst über die Hintergrundjobs auf.
+  Der Wrapper erkennt diese Meldung jetzt und wertet den Lauf als Erfolg mit Hinweis. Echte Fehler bleiben Fehler.
+- **Wartungsseite:** Erklärtext zur BigInt-Konvertierung (wofür, wann nötig, einmalig, vorher Backup) und Hinweis zur
+  Aufbewahrung „auto“; die Rückfrage vor BigInt empfiehlt Backup und Wartungsmodus.
+- **Entwicklung:** neue Datei `requirements-dev.txt` (`pip install -r requirements-dev.txt`), Kommentar zu `NCM_SUDO`
+  in `jobs.py` eindeutiger formuliert.
+- 3 neue Tests, insgesamt 76.
 
 ## Änderungen in 0.6.4 (Sicherheit)
 
@@ -219,7 +231,7 @@ Basis ist 0.5.2. Die Ideen aus dem Entwicklungsstand 0.6.0 sind übernommen, des
 | `templates/`, `static/` | HTML-Vorlagen, CSS, JS |
 | `nc-manager-cmd` | einziger per sudo erlaubter Befehl, Whitelist aller Aktionen |
 | `ncm_helper.py` | Auswertungen für den Wrapper (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose); root-eigen unter `/usr/local/lib/nc-manager` |
-| `tests/` | `python3 -m pytest tests/` – Web-App mit simuliertem Wrapper; echter Wrapper als root (mit MariaDB-Tests, wenn ein Server läuft) |
+| `tests/` | `pip install -r requirements-dev.txt`, dann `python3 -m pytest tests/` – Web-App mit simuliertem Wrapper; echter Wrapper als root (mit MariaDB-Tests, wenn ein Server läuft) |
 
 ## Lizenz
 

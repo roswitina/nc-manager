@@ -2,6 +2,18 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.6.5
+
+- **„Versionen/Papierkorb: abgelaufene löschen“ meldete fälschlich FEHLER.** Steht die Aufbewahrung auf „auto“
+  (Nextcloud-Standard), beenden sich `occ versions:expire` und `occ trashbin:expire` mit Exit-Code 1 und dem Hinweis
+  „Auto expiration is configured …“. Das ist kein Fehler: Nextcloud räumt dann selbst über die Hintergrundjobs auf.
+  Der Wrapper erkennt diese Meldung jetzt und wertet den Lauf als Erfolg mit Hinweis. Echte Fehler bleiben Fehler.
+- **Wartungsseite:** Erklärtext zur BigInt-Konvertierung (wofür, wann nötig, einmalig, vorher Backup) und Hinweis zur
+  Aufbewahrung „auto“; die Rückfrage vor BigInt empfiehlt Backup und Wartungsmodus.
+- **Entwicklung:** neue Datei `requirements-dev.txt` (`pip install -r requirements-dev.txt`), Kommentar zu `NCM_SUDO`
+  in `jobs.py` eindeutiger formuliert.
+- 3 neue Tests, insgesamt 76.
+
 ## 0.6.4
 
 **Sicherheit:** config.php gehört dem Webserver-Benutzer. Wer Nextcloud kompromittiert (z. B. über eine Lücke in einer App),

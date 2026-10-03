@@ -23,8 +23,7 @@ import time
 from contextlib import closing
 
 WRAPPER = os.environ.get('NCM_WRAPPER', '/usr/local/sbin/nc-manager-cmd')
-# Leerer Wert = Wrapper direkt aufrufen (nur für Tests).
-SUDO = os.environ.get('NCM_SUDO', 'sudo').split()
+SUDO = os.environ.get('NCM_SUDO', 'sudo').split()   # NCM_SUDO='' = Wrapper ohne sudo aufrufen (nur Tests)
 STATE_DIR = os.environ.get('NCM_STATE_DIR', '/var/lib/nc-manager')
 DB = os.path.join(STATE_DIR, 'history.db')
 JOB_DIR = os.path.join(STATE_DIR, 'jobs')

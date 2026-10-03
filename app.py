@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 import jobs
 
-VERSION = '0.6.4'
+VERSION = '0.6.5'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -43,7 +43,8 @@ MAINT_ACTIONS = {
     'columns': ('Fehlende DB-Spalten', '', None, 'Datenbank'),
     'keys': ('Fehlende Primary Keys', '', None, 'Datenbank'),
     'bigint': ('BigInt-Konvertierung', 'warn',
-               'Die BigInt-Konvertierung kann bei großen Instanzen lange dauern. Fortfahren?', 'Datenbank'),
+               'Die BigInt-Konvertierung schreibt große Tabellen neu und kann bei großen Instanzen lange dauern. '
+               'Am besten vorher ein Backup erstellen und den Wartungsmodus einschalten. Fortfahren?', 'Datenbank'),
     'files_scan': ('Alle Dateien neu einlesen', 'warn',
                    'files:scan --all liest die Dateien aller Benutzer neu ein und kann lange dauern. Fortfahren?',
                    'Dateien & Aufräumen'),

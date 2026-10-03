@@ -393,6 +393,13 @@ def test_restore_plan_blocked_by_untrusted_datadir(client, monkeypatch):   # 0.6
     assert ' disabled>Wiederherstellung starten' in html
 
 
+def test_maintenance_page_explains_bigint_and_auto_expiry(client):   # 0.6.5
+    login(client)
+    html = client.get('/maintenance').get_data(as_text=True)
+    assert 'BigInt-Konvertierung:' in html and '2,1 Milliarden' in html
+    assert 'auf „auto“' in html
+
+
 def test_restore_needs_typed_confirmation(client):
     login(client)
     t = csrf(client, '/backups/20261002-120000/restore')

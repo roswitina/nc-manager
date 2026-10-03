@@ -28,6 +28,12 @@ switch ($a[0] ?? "") {
   case "status": echo in_array("--output=json", $a) ? json_encode(["versionstring" => "30.0.1", "maintenance" => $m, "needsDbUpgrade" => false]) : "  - maintenance: " . ($m ? "true" : "false") . "\n"; break;
   case "maintenance:mode": $set(in_array("--on", $a)); echo "ok\n"; break;
   case "config:list": echo json_encode(["apps" => ["core" => ["backgroundjobs_mode" => "cron", "lastcron" => (string) (time() - 60), "x" => str_repeat("y", 200000)]]]); break;
+  case "versions:expire": case "trashbin:expire":   // wie Nextcloud: bei Aufbewahrung „auto“ Exit 1 mit Hinweis
+    $k = $a[0] === "versions:expire" ? "versions_retention_obligation" : "trashbin_retention_obligation";
+    $v = $CONFIG[$k] ?? "auto";
+    if ($v === "kaputt") { echo "Datenbankfehler\n"; exit(1); }
+    if (str_starts_with($v, "auto") && !str_contains($v, ",")) { echo "Auto expiration is configured - expiration will be handled automatically\n"; exit(1); }
+    echo "Abgelaufene Einträge gelöscht\n"; break;
   case "app:list": echo json_encode(["enabled" => array_fill_keys(array_map(fn($i) => "app$i", range(1, 3000)), "1.0.0")]); break;
   default: echo "ok\n";
 }
@@ -466,3 +472,19 @@ def test_helper_rejects_injected_db_settings(bad, tmp_path):
     assert r.returncode != 0 and any(w in r.stderr for w in why), r.stderr
     info = json.loads(_helper('db_info', bad).stdout)
     assert info['ok'] is False and any(w in info['error'] for w in why), info
+
+
+# ------------------------------------------------------------------ v0.6.5: Aufbewahrung „auto“ ist kein Fehler
+
+@pytest.mark.parametrize('action,key', [('versions_expire', 'versions_retention_obligation'),
+                                        ('trashbin_expire', 'trashbin_retention_obligation')])
+def test_expire_auto_is_not_an_error(sim, action, key):
+    r = run(sim, action)                                   # Standard: keine Regel gesetzt = auto
+    assert r.returncode == 0, r.stdout
+    assert 'Auto expiration is configured' in r.stdout and 'Kein Fehler' in r.stdout
+    set_config(sim, **{key: '30, 60'})                     # feste Regel: normaler Lauf
+    r = run(sim, action)
+    assert r.returncode == 0 and 'gelöscht' in r.stdout and 'Kein Fehler' not in r.stdout
+    set_config(sim, **{key: 'kaputt'})                     # echter Fehler bleibt ein Fehler
+    r = run(sim, action)
+    assert r.returncode == 1 and 'Datenbankfehler' in r.stdout and 'Kein Fehler' not in r.stdout
