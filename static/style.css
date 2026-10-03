@@ -82,3 +82,13 @@ ol li{margin:4px 0}
 .snippet{white-space:pre;overflow-x:auto;font-size:.8rem;margin:6px 0 2px}
 tr.fixrow td{border-top:none;padding-top:0}
 tr.fixrow summary{cursor:pointer;color:#7cb8ff;font-size:.85rem}
+.tag{display:inline-block;margin-left:6px;padding:0 7px;border-radius:999px;font-size:.72rem;font-weight:700;font-family:system-ui,sans-serif;vertical-align:1px}
+.tag-crit{background:#4a2025;color:#fda4af}.tag-set{background:#173e2a;color:#86efac}.tag-unk{background:#3a3550;color:#c4b5fd}.tag-dep{background:#4a3a14;color:#fcd34d}
+table.cfg td.key{width:34%;vertical-align:top}
+pre.desc{white-space:pre-wrap;font-size:.8rem;background:none;padding:6px 0;margin:0;color:var(--muted);max-height:none}
+.catalog-group{border-top:1px solid var(--line);padding:6px 0}.catalog-group>summary{cursor:pointer;font-weight:700}
+.catalog-item{padding:2px 0 2px 14px}.catalog-item summary{cursor:pointer}
+a.btn{display:inline-block;text-decoration:none;color:#fff}
+.nowrap{white-space:nowrap;word-break:normal}
+#set .inline-form{display:flex;gap:8px;align-items:center;flex-wrap:nowrap}
+#set .inline-form input{margin:0;min-width:150px;width:auto;flex:1}

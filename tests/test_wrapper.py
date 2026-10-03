@@ -27,7 +27,16 @@ $set = function ($v) use ($cfgf) { $CONFIG = []; include $cfgf; $CONFIG["mainten
 switch ($a[0] ?? "") {
   case "status": echo in_array("--output=json", $a) ? json_encode(["versionstring" => "30.0.1", "maintenance" => $m, "needsDbUpgrade" => false]) : "  - maintenance: " . ($m ? "true" : "false") . "\n"; break;
   case "maintenance:mode": $set(in_array("--on", $a)); echo "ok\n"; break;
-  case "config:list": echo json_encode(["apps" => ["core" => ["backgroundjobs_mode" => "cron", "lastcron" => (string) (time() - 60), "x" => str_repeat("y", 200000)]]]); break;
+  case "config:list":
+    if (($a[1] ?? "") === "system") { echo json_encode(["system" => $CONFIG]); break; }
+    echo json_encode(["apps" => ["core" => ["backgroundjobs_mode" => "cron", "lastcron" => (string) (time() - 60), "x" => str_repeat("y", 200000)]]]); break;
+  case "config:system:set": case "config:system:delete":
+    $k = $a[1]; $v = null; $t = "string";
+    foreach ($a as $x) { if (str_starts_with($x, "--value=")) $v = substr($x, 8); if (str_starts_with($x, "--type=")) $t = substr($x, 7); }
+    $CONFIG = []; include $cfgf;
+    if ($a[0] === "config:system:delete") unset($CONFIG[$k]); else $CONFIG[$k] = $t === "integer" ? (int) $v : $v;
+    file_put_contents($cfgf, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
+    echo "System config value $k set\n"; break;
   case "versions:expire": case "trashbin:expire":   // wie Nextcloud: bei Aufbewahrung „auto“ Exit 1 mit Hinweis
     $k = $a[0] === "versions:expire" ? "versions_retention_obligation" : "trashbin_retention_obligation";
     $v = $CONFIG[$k] ?? "auto";
@@ -38,6 +47,50 @@ switch ($a[0] ?? "") {
   default: echo "ok\n";
 }
 '''
+
+
+# Kleine, selbst geschriebene Beispieldatei im Format von Nextclouds config.sample.php.
+SAMPLE = """<?php
+$CONFIG = [
+
+/**
+ * Default Parameters
+ *
+ * Erster Abschnitt.
+ */
+
+/**
+ * Where user files are stored. Defaults to ``data/`` in the Nextcloud directory.
+ */
+'datadirectory' => '/var/www/nextcloud/data',
+
+/**
+ * The secret. Never share it.
+ */
+'secret' => '',
+
+/**
+ * Logging
+ */
+
+/**
+ * Loglevel to start logging at. Defaults to ``2``.
+ */
+'loglevel' => 2,
+
+/**
+ * An old option.
+ *
+ * @deprecated use something else
+ */
+'altes_ding' => true,
+
+/**
+ * Region for phone numbers.
+ */
+'default_phone_region' => 'GB',
+];
+"""
 
 
 def _can_run():
@@ -64,6 +117,7 @@ def make_sim(dbtype='sqlite3'):
     os.chmod(os.path.join(d, 'www'), 0o755)
     open(os.path.join(nc, 'occ'), 'w').write(OCC)
     open(os.path.join(nc, 'version.php'), 'w').write('<?php // original\n')
+    open(os.path.join(nc, 'config', 'config.sample.php'), 'w').write(SAMPLE)
     open(os.path.join(nc, 'updater', 'updater.phar'), 'w').write('<?php echo "updater\\n";')
     cfg = {'datadirectory': data, 'dbtype': dbtype, 'maintenance': False,
            'redis': {'host': 'localhost', 'port': 6379, 'password': 'REDIS-GEHEIM'}}
@@ -619,3 +673,62 @@ def test_web_reload_refuses_broken_config(websim):
     assert subprocess.run(['pgrep', '-x', 'nginx'], capture_output=True).returncode == 0     # läuft weiter
     os.unlink(N_SITE)
     assert run(websim, 'web_reload', 'nginx').returncode == 0
+
+
+# ------------------------------------------------------------------ v0.8.0: config.php
+
+def test_config_info_masks_secrets_and_reads_sample(sim):
+    set_config(sim, secret='GEHEIM-123', mail_smtppassword='MAILPW')
+    r = run(sim, 'config_info')
+    assert r.returncode == 0, r.stderr
+    assert 'GEHEIM-123' not in r.stdout and 'MAILPW' not in r.stdout and 'REDIS-GEHEIM' not in r.stdout
+    j = json.loads(r.stdout)
+    cfg = j['config']['system']
+    assert cfg['secret'] == '••• ausgeblendet' and cfg['redis']['password'] == '••• ausgeblendet'
+    assert cfg['datadirectory'] == sim['data'] and cfg['redis']['host'] == 'localhost'      # nicht geheim: sichtbar
+    o = j['sample']['options']
+    assert j['sample']['sections'] == ['Default Parameters', 'Logging']
+    assert o['loglevel']['default'] == '2' and o['loglevel']['section'] == 'Logging'
+    assert o['altes_ding']['deprecated'] and not o['loglevel']['deprecated']
+    assert j['status']['versionstring'] == '30.0.1' and j['nc_path'] == sim['nc']
+
+
+def test_config_sample_is_read_as_webuser(sim):
+    # Zeigt die Beispieldatei auf eine nur für root lesbare Datei, darf sie nicht gelesen werden.
+    secret = os.path.join(sim['dir'], 'nur-root.txt')
+    open(secret, 'w').write("<?php\n$CONFIG = [\n/**\n * root-Inhalt\n */\n'x' => 1,\n];\n")
+    os.chmod(secret, 0o600)
+    smp = os.path.join(sim['nc'], 'config', 'config.sample.php')
+    os.unlink(smp)
+    os.symlink(secret, smp)
+    j = json.loads(run(sim, 'config_info').stdout)
+    assert j['sample']['options'] == {} and 'root-Inhalt' not in json.dumps(j)
+
+
+def test_config_set_and_reset_only_whitelisted(sim):
+    cfgf = os.path.join(sim['nc'], 'config', 'config.php')
+    assert run(sim, 'config_set', 'datadirectory', '/etc').returncode == 65
+    assert run(sim, 'config_set', 'trusted_domains', 'x').returncode == 65
+    assert run(sim, 'config_set', 'loglevel', '7').returncode == 65
+    assert run(sim, 'config_set', 'default_phone_region', 'at').returncode == 65
+    assert run(sim, 'config_set', 'logtimezone', 'Mars/Olympus').returncode == 65
+    assert run(sim, 'config_set', 'default_phone_region', '--help').returncode == 65
+    r = run(sim, 'config_set', 'default_phone_region', 'AT')
+    assert r.returncode == 0 and 'Gesetzt' in r.stdout
+    assert run(sim, 'config_set', 'loglevel', '3').returncode == 0
+    assert run(sim, 'config_set', 'trashbin_retention_obligation', 'auto, 30').returncode == 0
+    src = open(cfgf).read()
+    assert "'default_phone_region' => 'AT'" in src and "'loglevel' => 3," in src and "'auto, 30'" in src
+    assert run(sim, 'config_reset', 'default_phone_region').returncode == 0
+    assert 'default_phone_region' not in open(cfgf).read()
+    assert run(sim, 'config_reset', 'dbtype').returncode == 65
+
+
+def test_config_sources_with_extra_config_file(sim):
+    extra = os.path.join(sim['nc'], 'config', 'zz-test.config.php')
+    open(extra, 'w').write("<?php\n$CONFIG = array (\n  'loglevel' => 3,\n  'memcache.local' => 'x',\n);\n")
+    subprocess.run(['chown', 'www-data:www-data', extra], check=True)
+    src = json.loads(run(sim, 'config_info').stdout)['sources']
+    assert src['loglevel'] == {'file': extra, 'line': 3}                     # spätere Datei gewinnt
+    assert src['memcache.local'] == {'file': extra, 'line': 4}
+    assert src['datadirectory']['file'].endswith('/config/config.php') and src['datadirectory']['line'] > 0

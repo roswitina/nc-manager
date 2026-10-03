@@ -1,8 +1,8 @@
-# Nextcloud Server Manager – Programmdokumentation (Version 0.7.1)
+# Nextcloud Server Manager – Programmdokumentation (Version 0.8.0)
 
 Stand: 2. Oktober 2026 · Die PDF-Fassung liegt jedem Release bei.
 
-Der Nextcloud Server Manager (Version 0.7.1) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
+Der Nextcloud Server Manager (Version 0.8.0) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
 
 > **Urheber:** roswitina@hotmail.com · **Lizenz:** MIT · Unentgeltlich und ohne jede Gewährleistung bereitgestellt; die Nutzung erfolgt auf eigenes Risiko. Einzelheiten im Abschnitt „Lizenz und Haftungsausschluss“.
 
@@ -18,6 +18,7 @@ Der Nextcloud Server Manager (Version 0.7.1) ist eine Weboberfläche, mit der ma
 - [Bedienung: Dashboard und Prüfungen](#bedienung-dashboard-und-prüfungen)
 - [Bedienung: PHP und PHP-FPM](#bedienung-php-und-php-fpm)
 - [Bedienung: Webserver](#bedienung-webserver)
+- [Bedienung: config.php und Systembericht](#bedienung-configphp-und-systembericht)
 - [Bedienung: Apps und Nextcloud-Update](#bedienung-apps-und-nextcloud-update)
 - [Bedienung: Backups und Wiederherstellung](#bedienung-backups-und-wiederherstellung)
 - [Bedienung: Diagnose](#bedienung-diagnose)
@@ -35,15 +36,16 @@ Der Nextcloud Server Manager (Version 0.7.1) ist eine Weboberfläche, mit der ma
 
 ## Funktionsumfang
 
-Das Programm bündelt die häufigsten Admin-Aufgaben einer Nextcloud-Instanz in zwölf Seiten. Alles, was etwas verändert, läuft als protokollierter Hintergrund-Job; es kann immer nur eine ändernde Aktion gleichzeitig laufen.
+Das Programm bündelt die häufigsten Admin-Aufgaben einer Nextcloud-Instanz in dreizehn Seiten. Alles, was etwas verändert, läuft als protokollierter Hintergrund-Job; es kann immer nur eine ändernde Aktion gleichzeitig laufen.
 
 | Seite | Wofür | Ändert etwas? |
 | --- | --- | --- |
-| Dashboard | Zustand von Nextcloud, System, PHP, Datenbank, Webserver, Speicher, Hintergrundjobs; Ampel „Gesundheitszustand“ | nein |
+| Dashboard | Zustand von Nextcloud, System, PHP, Datenbank, Webserver, Speicher, Hintergrundjobs; Ampel „Gesundheitszustand“; Knopf „Systembericht drucken“ | nein |
 | Prüfungen | Ergebnis von occ setupchecks – dieselben Hinweise wie die Nextcloud-Verwaltungsübersicht | nein |
 | PHP | Wirksame PHP-Werte (inkl. .user.ini/.htaccess), Empfehlungen mit Quelle, Fundstellen in den INI-Dateien, Werte setzen | ja |
 | PHP-FPM | Prozess-Pool, Speicher je Worker, Treffer „max\_children erreicht“, berechneter Vorschlag | ja |
 | Webserver | Apache- bzw. nginx-Einstellungen für Nextcloud mit Empfehlung und Doku-Link, Vorschläge zum Kopieren; Apache-Module einschalten, Webserver testen und neu laden | nur Module und Neuladen |
+| config.php | Alle Einstellungen mit Datei:Zeile und Erklärung aus config.sample.php, Empfehlungen, Katalog mit Suche, Druckansicht; harmlose Schlüssel setzen | nur harmlose Schlüssel |
 | Apps | Verfügbare App-Updates, einzeln oder alle installieren, Liste aller Apps | ja |
 | Update | Vorprüfung, Update-Suche, Nextcloud-Update mit optionalem Backup und App-Updates | ja |
 | Backups | Backup mit Prüfsummen, optional mit Benutzerdaten; prüfen; geführte Wiederherstellung | ja |
@@ -104,12 +106,12 @@ Zugriff aufs Internet braucht der Server nur für die Paketinstallation, die Upd
 
 Die Installation dauert etwa zwei bis fünf Minuten und läuft komplett über das Skript install.sh, das als root gestartet wird.
 
-1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.7.1.tar.gz user@server:`
+1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.8.0.tar.gz user@server:`
 2. Entpacken und ins Verzeichnis wechseln:
 
    ```bash
-   tar xzf nc-manager-v0.7.1.tar.gz
-   cd nc-manager-v0.7.1
+   tar xzf nc-manager-v0.8.0.tar.gz
+   cd nc-manager-v0.8.0
    ```
 3. Installer starten: `sudo ./install.sh`
 4. Die Fragen beantworten (Tabelle unten). Mit Enter wird jeweils die Vorgabe in eckigen Klammern übernommen.
@@ -153,6 +155,8 @@ Ein Upgrade ist dieselbe Prozedur wie die Installation: neues Archiv entpacken u
 - **Ersetzt** werden app.py, jobs.py, templates/, static/, Wrapper und Helfer. Die venv bleibt erhalten, Pakete werden nur aktualisiert.
 - **Protokoll:** Beim ersten Start migriert die App die alte Tabelle aus v0.4.3 automatisch. Reine Lese-Aufrufe wie Dashboard-Abfragen werden dabei verworfen, echte Aktionen bleiben erhalten.
 - **Laufende Aktion:** Der Dienst wird während des Upgrades gestoppt. Ein laufender Hintergrund-Job (z. B. ein Nextcloud-Update) läuft dank KillMode=process trotzdem zu Ende. Besser ist es aber, das Upgrade erst danach zu starten.
+
+**Von 0.7.1 auf 0.8.0:** Keine Besonderheiten, einfach install.sh ausführen. Die Seite config.php und der Systembericht stehen danach sofort zur Verfügung.
 
 **Von 0.7.0 auf 0.7.1:** Keine Besonderheiten. Behebt den Abbruch von Backup und Wiederherstellung (Exit-Code 38) bei Datenverzeichnissen mit `.ncdata`.
 
@@ -420,6 +424,40 @@ Die Grundlage jeder Empfehlung steht als Kennzeichen daneben: „Doku“ (ausdr�
 - **Vorschlag:** Unter jeder Abweichung lässt sich aufklappen, welche Zeile(n) wohin gehören, z. B. „in den server-Block der Nextcloud (/etc/nginx/sites-enabled/nextcloud)“. Die Änderung trägt man selbst ein. Der Manager schreibt die Webserver-Konfiguration bewusst nicht: VirtualHosts und server-Blöcke sind sehr unterschiedlich aufgebaut, und ein Fehler dort macht die Nextcloud unerreichbar.
 - **Einschalten** (nur Apache): schaltet ein fehlendes Modul aus der festen Liste rewrite, headers, env, dir, mime, setenvif mit `a2enmod` ein, testet die Konfiguration und lädt Apache neu. Scheitert der Test, wird das Modul wieder abgeschaltet (Exit-Code 68) und Apache läuft unverändert weiter.
 - **Testen und neu laden:** prüft die Konfiguration (`apache2ctl configtest` bzw. `nginx -t`) und lädt den Webserver nur dann neu. Bei einem Fehler bleibt der laufende Webserver unverändert (Exit-Code 68), die Ausgabe nennt Datei und Zeile.
+
+## Bedienung: config.php und Systembericht
+
+Die Seite config.php zeigt alle Einstellungen der Nextcloud und erklärt sie. Die Beschreibungen stammen aus `config/config.sample.php` der installierten Nextcloud-Version – dieselbe Datei, aus der Nextcloud die offizielle Doku erzeugt. Sie passt deshalb immer zur Version und braucht kein Internet.
+
+### Woher die Werte kommen
+
+- **Werte:** `occ config:list system --private` als Webserver-Benutzer – enthält auch Einstellungen aus zusätzlichen `*.config.php`-Dateien (z. B. von DietPi). Der Wrapper blendet Passwörter, `secret`, `passwordsalt`, Schlüssel und Tokens aus (`••• ausgeblendet`), bevor irgendetwas an die Web-App geht. Datenverzeichnis, Datenbank-Host und -Name bleiben sichtbar, weil man sie im Notfall braucht.
+- **Fundort:** Für jeden Schlüssel ermittelt der Wrapper Datei und Zeile. Nextcloud lädt zuerst config.php, danach alle `*.config.php` im selben Ordner; ein späterer Wert überschreibt einen früheren – angezeigt wird die Datei, deren Wert gilt.
+- **Beschreibungen:** `config.sample.php` wird nur als Text gelesen (nie ausgeführt) und nur als Webserver-Benutzer – die Datei liegt im Nextcloud-Ordner, den dieser Benutzer ändern kann.
+
+### Aufbau der Seite
+
+| Bereich | Inhalt |
+| --- | --- |
+| Empfehlungen | Ampel für fehlende oder ungünstige Einstellungen: default\_phone\_region, maintenance\_window\_start, memcache.local, memcache.locking, debug, Wartungsmodus, overwrite.cli.url, loglevel, logtimezone, veraltete und nicht beschriebene Schlüssel. Vieles davon meldet Nextcloud auch unter „Prüfungen“ |
+| Einstellungen ändern | Nur harmlose Schlüssel (siehe unten), mit Prüfung des Werts; „Standard“ entfernt den Eintrag, dann gilt der Nextcloud-Standard |
+| Deine Einstellungen | Alle gesetzten Schlüssel nach Doku-Abschnitt, mit Wert, Standardwert, Datei:Zeile und Beschreibung. Kennzeichen: **kritisch** (nur anzeigen), **änderbar**, **veraltet**, **nicht beschrieben** (meist App-Einstellung – oder ein Tippfehler, dann wirkt der Schlüssel nicht) |
+| Alle verfügbaren Einstellungen | Katalog aller Schlüssel aus config.sample.php mit Suche; ✓ markiert gesetzte |
+
+**Änderbar** sind nur: default\_phone\_region (ISO-Ländercode), default\_language, default\_locale, logtimezone (muss unter /usr/share/zoneinfo existieren), loglevel (0–4), maintenance\_window\_start (0–23 oder 100), trashbin\_retention\_obligation und versions\_retention\_obligation (auto, „auto, D“, „D, auto“, „D1, D2“, disabled), preview\_max\_x und preview\_max\_y. Der Manager verwendet dafür `occ config:system:set` bzw. `config:system:delete` und bearbeitet config.php nie direkt. Datenbank, Datenverzeichnis, trusted\_domains, overwrite.\*, Caching und alle anderen Schlüssel werden nur angezeigt – ein Fehler dort kann Nextcloud unerreichbar machen.
+
+### Druckansicht und Systembericht
+
+- **Druckansicht config.php** (Knopf auf der Seite): alle Einstellungen dieser Instanz, kritische zuerst mit deutscher Erklärung, danach die übrigen nach Abschnitt, am Ende offene Empfehlungen. Für A4 formatiert; „Drucken / als PDF speichern“ öffnet den Druckdialog des Browsers.
+- **Systembericht** (Knopf auf dem Dashboard und der Seite config.php): ein Dokument mit allen wichtigen Einstellungen und ihrem Fundort:
+  1. config.php nach Datei geordnet, mit Zeilennummer
+  2. PHP-Werte für Web und CLI, jeweils mit der INI-Datei (bzw. .user.ini/.htaccess), aus der der wirksame Wert stammt
+  3. PHP-FPM-Pools mit Einstellungen und Pool-Datei
+  4. Webserver mit Datei:Zeile im VirtualHost bzw. server-Block
+  5. Hintergrundjobs (Modus, Cron-Eintrag mit Fundort), Datenbank, Redis, Caches
+  6. Liste der wichtigen Dateien
+
+Beide Dokumente enthalten keine Passwörter, aber Adressen, Pfade und Datenbank-Namen – sicher aufbewahren.
 
 ## Bedienung: Apps und Nextcloud-Update
 
@@ -724,7 +762,7 @@ Der Manager legt Dateien an genau diesen Stellen an; außerhalb davon verändert
 | /opt/nc-manager/LICENSE.md, HAFTUNGSAUSSCHLUSS.md | ncmanager | Lizenztext und Haftungsausschluss, angezeigt auf der Seite /lizenz |
 | \<Backup-Verzeichnis>/logs/ | root, 700/600 | Archivierte Nextcloud-Logs (nextcloud.log.\<JJJJMMTT-HHMMSS>.gz) |
 
-Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), requirements-dev.txt (zusätzlich pytest, nur für Tests), templates/ (19 Vorlagen), static/ (style.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE und LICENSE.md (gleicher Inhalt; das Programm verwendet LICENSE), HAFTUNGSAUSSCHLUSS.md, docs/DOKUMENTATION.md (diese Dokumentation als Markdown) und docs/Nextcloud-Server-Manager-Doku-v.0.7.1.pdf (als PDF).
+Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), requirements-dev.txt (zusätzlich pytest, nur für Tests), templates/ (22 Vorlagen), static/ (style.css, print.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE und LICENSE.md (gleicher Inhalt; das Programm verwendet LICENSE), HAFTUNGSAUSSCHLUSS.md, docs/DOKUMENTATION.md (diese Dokumentation als Markdown) und docs/Nextcloud-Server-Manager-Doku-v.0.8.0.pdf (als PDF).
 
 ## Sicherheitskonzept
 
@@ -767,6 +805,7 @@ Jede Eingabe wird zweimal geprüft: in der Web-App und noch einmal im Wrapper bz
 | Update-Optionen | nur „backup“ und „apps“ |
 | Apache-Modul einschalten | nur rewrite, headers, env, dir, mime, setenvif |
 | Webserver neu laden | nur apache2 oder nginx, und nur nach erfolgreichem Konfigurationstest |
+| config.php setzen/zurücksetzen | nur 10 harmlose Schlüssel, Wert je Schlüssel per Muster (Ländercode, Sprachcode, Zeitzone mit vorhandener Datei, Zahlenbereiche, Aufbewahrungsregel) |
 | Datenverzeichnis aus config.php | nur der bei der Installation festgehaltene Pfad, plus Plausibilitätsprüfungen (siehe oben) |
 | Datenbank-Angaben aus config.php | keine Steuerzeichen, kein führendes „-“, Port nur Ziffern, SQLite-Name nur Buchstaben/Ziffern/.\_- |
 
@@ -783,6 +822,7 @@ Befehle werden immer als Argumentliste aufgerufen, nie über eine Shell-Zeichenk
 ### Geheimnisse
 
 - Datenbank- und Redis-Zugangsdaten verlassen den Wrapper nur über eine Pipe zum Helfer. mysqldump und mariadb bekommen sie in einer temporären Datei mit Rechten 600, die danach gelöscht wird; pg\_dump/psql und redis-cli über Umgebungsvariablen. Sie stehen nie in Argumenten, Ausgaben oder Daten für die Web-App.
+- Die Seite config.php und der Systembericht erhalten alle Einstellungen, aber ohne Geheimnisse: Passwörter, secret, passwordsalt, Schlüssel und Tokens ersetzt der Wrapper durch „••• ausgeblendet“, bevor die Daten den Wrapper verlassen. config.sample.php liest er nur als Text und nur als Webserver-Benutzer.
 - Dashboard, Prüfungen und Diagnose lesen aus config.php nur unkritische Werte (Datenverzeichnis, DB-Typ, -Host, -Name, Cache- und Log-Einstellungen). Den Redis-Eintrag mit Passwort liest nur der Wrapper selbst.
 - Backups und config.php-Kopien sind nur für root lesbar.
 
@@ -823,6 +863,9 @@ Die erste Anlaufstelle ist immer die Ausgabe des Jobs (Protokoll) bzw. das Journ
 | Webserver: „Kein VirtualHost/server-Block gefunden, der … ausliefert“ | Nextcloud wird über einen anderen Pfad, einen Symlink oder einen Reverse-Proxy auf einem anderen Rechner ausgeliefert | Unter „Alle VirtualHosts“ prüfen, welcher Bereich Nextcloud ausliefert; geprüft werden dann nur allgemeine Punkte |
 | Webserver: „Die Konfiguration konnte nicht gelesen werden“ | `apache2ctl -V`/`-M` bzw. `nginx -T` scheitert, meist an einem Fehler in der Konfiguration | Angezeigte Meldung lesen; `sudo apache2ctl configtest` bzw. `sudo nginx -t` |
 | Webserver: Einstellung steht in der Datei, die Seite meldet sie trotzdem als fehlend | Sie steht in einem `<IfModule>` eines nicht geladenen Moduls oder in einem anderen VirtualHost/server-Block | Modul einschalten bzw. Zeile in den Nextcloud-Bereich verschieben |
+| config.php: Schlüssel als „nicht beschrieben“ markiert | Einstellung einer App – oder ein Tippfehler im Schlüssel | Mit der App-Doku vergleichen; ein Tippfehler bedeutet, dass die Einstellung nicht wirkt |
+| config.php: „config.sample.php nicht lesbar“ | Datei fehlt (manche Pakete entfernen sie) oder gehört nicht dem Webserver-Benutzer | Werte werden trotzdem angezeigt, nur ohne Beschreibung; Datei aus dem Nextcloud-Archiv derselben Version wiederherstellen |
+| config.php: Setzen meldet „Ungültiger Wert“ | Wert passt nicht zum Muster (z. B. Ländercode klein geschrieben, Zeitzone unbekannt) | Hinweis unter dem Schlüssel beachten, z. B. AT statt at, Europe/Vienna |
 | Diagnose: Redis „Connection refused“ | Redis läuft nicht oder Host/Port/Socket in config.php falsch | `systemctl status redis-server`; Eintrag redis in config.php prüfen |
 | Hook wird nicht ausgeführt | Datei oder Ordner für Gruppe/Andere beschreibbar oder nicht root-eigen | `sudo chown root: <Datei>; sudo chmod 700 <Datei>` |
 | PHP-Wert wirkt nicht | Eine später geladene INI-Datei oder Nextclouds .user.ini/.htaccess überschreibt ihn | „Wo stehen die Werte?“ und Spalte „Aktuell (Web)“ auf der PHP-Seite |
@@ -856,7 +899,7 @@ Die erste Anlaufstelle ist immer die Ausgabe des Jobs (Protokoll) bzw. das Journ
 | 37 | Log archivieren: Archiv erstellt, aber Logdatei konnte nicht geleert werden |
 | 38 | Backup: Datenverzeichnis nicht vertrauenswürdig (weicht vom festgehaltenen ab, NCM\_DATADIR fehlt oder Prüfung nicht bestanden) – nichts verändert |
 | 64 | Unbekannte Aktion |
-| 65 | Ungültiges Argument (Wert, App-ID, Backup-Name, Pool, Version, Apache-Modul, Webserver) |
+| 65 | Ungültiges Argument (Wert, App-ID, Backup-Name, Pool, Version, Apache-Modul, Webserver, config.php-Schlüssel oder -Wert) |
 | 66 | PHP-FPM: Werte abgelehnt · Webserver: a2enmod fehlgeschlagen · Wiederherstellung: Backup-Prüfung fehlgeschlagen (nichts verändert) |
 | 67 | PHP: keine conf.d-Verzeichnisse · Webserver: läuft nicht · Wiederherstellung: Voraussetzung nicht erfüllt, z. B. Datenverzeichnis nicht vertrauenswürdig (nichts verändert) |
 | 68 | PHP bzw. Webserver: Konfigurationstest fehlgeschlagen, zurückgerollt bzw. nicht neu geladen · Wiederherstellung: Sicherheits-Backup oder Wartungsmodus fehlgeschlagen |
@@ -889,7 +932,7 @@ Die Web-App ist eine Flask-Anwendung mit Jinja2-Vorlagen; die Root-Seite ist ein
 
 ```bash
 pip install -r requirements-dev.txt
-python3 -m pytest tests/          # 83 Tests (Webserver-Tests nur mit NCM_TEST_WEBSERVER=1, siehe unten) (Wrapper-Tests nur als root mit PHP, MariaDB-Tests nur mit laufendem Server)
+python3 -m pytest tests/          # 90 Tests (Webserver-Tests nur mit NCM_TEST_WEBSERVER=1, siehe unten) (Wrapper-Tests nur als root mit PHP, MariaDB-Tests nur mit laufendem Server)
 shellcheck nc-manager-cmd install.sh uninstall.sh
 ```
 
@@ -913,6 +956,7 @@ Die vier Tests gegen echte Webserver schreiben Testdateien nach /etc/apache2 und
 - Keine Unterstützung für den Betrieb unter einem Unterpfad hinter einem Proxy.
 - Der FPM-Vorschlag ist eine Faustformel für einen Pool; bei mehreren Pools oder sehr ungleicher Last von Hand anpassen.
 - Die Seite Webserver ändert die Konfiguration nicht selbst (nur Module einschalten und neu laden). Reverse-Proxys auf anderen Rechnern, Apache-Installationen außerhalb des Debian-Schemas (/etc/apache2) und sehr ungewöhnliche Konfigurationen (z. B. Nextcloud über Symlinks oder Umgebungsvariablen in Pfaden) erkennt sie nur eingeschränkt.
+- Die Beschreibungen der config.php-Einstellungen sind englisch (aus config.sample.php); deutsche Kurzerklärungen gibt es für die kritischen Schlüssel. Einstellungen von Apps stehen nicht in config.sample.php und erscheinen als „nicht beschrieben“.
 - Benachrichtigungen per Mail oder Push fehlen noch (geplant).
 
 ## Lizenz und Haftungsausschluss
@@ -946,6 +990,7 @@ Diese Python-Pakete lädt der Installer aus PyPI; sie sind nicht Teil des Archiv
 
 | Version | Wichtigste Änderungen |
 | --- | --- |
+| 0.8.0 | Neue Seite „config.php“ mit Datei:Zeile, Erklärungen aus config.sample.php, Empfehlungen, Katalog und Druckansicht; harmlose Schlüssel setzen; neuer druckbarer Systembericht mit Fundort jeder Einstellung (config.php, PHP, PHP-FPM, Webserver, Cron); Geheimnisse ausgeblendet |
 | 0.7.1 | Fehlerbehebung: Backup und Wiederherstellung akzeptieren die Markierung `.ncdata` aktueller Nextcloud-Versionen (bisher nur `.ocdata`, Abbruch mit Exit-Code 38) |
 | 0.7.0 | Neue Seite „Webserver“: Apache- und nginx-Einstellungen für Nextcloud prüfen, mit Empfehlung, Grundlage, Doku-Link und Vorschlägen zum Kopieren; Apache-Module einschalten und Webserver nach Konfigurationstest neu laden |
 | 0.6.5 | „Versionen/Papierkorb: abgelaufene löschen“ meldet bei Aufbewahrung „auto“ keinen Fehler mehr; Erklärtext zur BigInt-Konvertierung auf der Wartungsseite; requirements-dev.txt |

@@ -24,6 +24,7 @@ case "$1" in
  logs) [ "$2" = 2000 ] && { echo "nc-manager-cmd: /usr/bin/python3: Argument list too long" >&2; exit 126; }
    echo '{"log_type":"file","loglevel":"2","log_rotate_size":"","archives":"3","nextcloud":{"ok":true,"path":"/srv/data/nextcloud.log","size":5242880,"rotated_size":104857600,"entries":[{"time":"2020-01-01T10:00:00+00:00","level":3,"app":"alt","message":"uralter Fehler"},{"time":"'$(date -u -d "+1 hour" +%Y-%m-%dT%H:%M:%S+00:00)'","level":3,"app":"neu","message":"ganz neuer Fehler"},{"time":"t1","level":3,"app":"files","user":"admin","message":"Datei <b>fehlt</b>","exception":"NotFoundException: x"},{"time":"t2","level":1,"app":"core","message":"nur info"},{"level":-1,"message":"kaputte Zeile"},{"time":"t3","level":"4","app":"core","message":"Level als Text"},{"time":"t4","level":null,"app":"core","message":"Level fehlt"}]},"fpm":{"ok":true,"path":"/var/log/php8.2-fpm.log","lines":["fpm zeile"]},"web":null}' ;;
  web_info) cat "$(dirname "$0")/web_info.json" ;;
- web_enmod|web_reload) echo "$*" ;;
+ web_enmod|web_reload|config_set|config_reset) echo "$*" ;;
+ config_info) cat "$(dirname "$0")/config_info.json" ;;
  *) echo "Nicht erlaubte Aktion."; exit 64 ;;
 esac

@@ -1487,10 +1487,85 @@ def cmd_web_info(nc_path):
     out(res)
 
 
+
+# ================================================================== config.php (nur lesen)
+
+SECRET_KEYS = {'secret', 'passwordsalt', 'dbpassword', 'mail_smtppassword', 'updater.secret', 'proxyuserpwd',
+               'activity_dbpassword', 'sentry.dsn', 'license-key', 'instance_secret'}
+SECRET_RX = re.compile(r'pass(word|wd)?$|passwd|pwd$|secret|salt$|token|api_?key|private_?key|credential|dsn$', re.I)
+MASK = '••• ausgeblendet'
+
+
+def _mask(obj, key=''):
+    """Blendet Geheimnisse aus (Passwörter, secret, Salt, Schlüssel, Tokens) – rekursiv in Arrays."""
+    k = str(key).lower()
+    if key and (k in SECRET_KEYS or SECRET_RX.search(k) or k == 'key'):
+        return MASK if obj not in (None, '', [], {}) else obj
+    if isinstance(obj, dict):
+        return {kk: _mask(v, kk) for kk, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask(v) for v in obj]
+    return obj
+
+
+def cmd_config_mask():
+    """Liest die Ausgabe von occ config:list system --private (stdin) und gibt sie ohne Geheimnisse aus."""
+    raw = sys.stdin.read()
+    try:
+        data = json.loads(raw or '{}')
+    except ValueError:
+        out({'error': 'occ config:list lieferte keine gültigen Daten', 'system': {}})
+        return
+    system = data.get('system', data) if isinstance(data, dict) else {}
+    out({'system': _mask(system if isinstance(system, dict) else {})})
+
+
+def cmd_config_sample(path):
+    """Wertet config.sample.php aus: Abschnitte, Schlüssel, Beschreibung, Beispiel, Standardwert.
+    Die Datei wird nur als Text gelesen, nie ausgeführt (läuft als Webserver-Benutzer)."""
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            text = f.read(2_000_000)
+    except OSError as e:
+        out({'error': f'{path}: {e.strerror}', 'sections': [], 'options': {}})
+        return
+    body = text.split('$CONFIG', 1)[1] if '$CONFIG' in text else text
+    parts = re.split(r'^\s*/\*\*\s*$', body, flags=re.M)
+    section, sections, opts, order = 'Allgemein', [], {}, 0
+    key_rx = re.compile(r"^'([^']+)'\s*=>", re.M)
+    for part in parts[1:]:
+        m = re.search(r'^\s*\*/\s*$', part, flags=re.M)
+        if not m:
+            continue
+        comment, code = part[:m.start()], part[m.end():]
+        desc = '\n'.join(re.sub(r'^\s*\* ?', '', ln) for ln in comment.split('\n')).strip()
+        found = list(key_rx.finditer(code))
+        if not found:
+            title = desc.split('\n', 1)[0].strip()
+            if title and not title.startswith('@') and not code.strip().strip('];').strip():
+                section = title
+                sections.append(title)
+            continue
+        dm = re.search(r'Defaults? to\s+(.+?)(?:\.\s|\.$|\n\n|$)', desc, flags=re.S)
+        default = re.sub(r'``([^`]*)``', r'\1', ' '.join(dm.group(1).split())) if dm else ''
+        if default.endswith(':'):          # „Defaults to the following …:“ – kein Einzelwert
+            default = ''
+        for i, mm in enumerate(found):
+            end = found[i + 1].start() if i + 1 < len(found) else len(code)
+            example = re.sub(r',\s*$', '', code[mm.end():end].strip()).strip()
+            k = mm.group(1)
+            if k in opts:
+                continue
+            order += 1
+            opts[k] = {'section': section, 'desc': desc[:6000], 'example': example[:1500],
+                       'default': default[:300], 'order': order, 'deprecated': '@deprecated' in desc}
+    out({'sections': sections, 'options': opts})
+
+
 COMMANDS = {
     'fpm_log': cmd_fpm_log, 'backup_verify': cmd_backup_verify, 'backup_info': cmd_backup_info, 'db_restore': cmd_db_restore, 'db_info': cmd_db_info, 'redis_info': cmd_redis_info, 'ini_sources': cmd_ini_sources, 'nc_overrides': cmd_nc_overrides, 'nclog': cmd_nclog, 'textlog': cmd_textlog, 'fpm_info': cmd_fpm_info, 'fpm_write': cmd_fpm_write,
     'db_dump': cmd_db_dump, 'backup_list': cmd_backup_list, 'backup_prune': cmd_backup_prune,
-    'web_info': cmd_web_info,
+    'web_info': cmd_web_info, 'config_mask': cmd_config_mask, 'config_sample': cmd_config_sample,
 }
 
 if __name__ == '__main__':

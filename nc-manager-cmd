@@ -272,7 +272,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.7.1"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.8.0"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
@@ -451,6 +451,26 @@ web_reload_service() {
   fi
 }
 
+# ---------------------------------------------------------------- config.php
+# Lesen: alle Einstellungen (Geheimnisse ausgeblendet) und die Beschreibungen aus config.sample.php.
+# Setzen/Zurücksetzen nur für diese harmlosen Schlüssel – über occ als Webserver-Benutzer, nie durch
+# Bearbeiten der Datei. Datenbank, Datenverzeichnis, trusted_domains, Caching usw. bleiben unberührt.
+CONFIG_KEYS='default_phone_region default_language default_locale logtimezone loglevel maintenance_window_start trashbin_retention_obligation versions_retention_obligation preview_max_x preview_max_y'
+config_key_ok() { case " $CONFIG_KEYS " in *" $1 "*) [ -n "$1" ] ;; *) return 1 ;; esac; }
+config_value_ok() {   # gibt den occ-Typ aus, wenn der Wert zulässig ist
+  local ret='^(auto|disabled|auto, ?[0-9]{1,4}|[0-9]{1,4}, ?auto|[0-9]{1,4}, ?[0-9]{1,4})$'
+  case "$1" in
+    default_phone_region) [[ $2 =~ ^[A-Z]{2}$ ]] && echo string ;;
+    default_language|default_locale) [[ $2 =~ ^[a-z]{2,3}(_[A-Z][a-z]{3})?(_[A-Z]{2})?$ ]] && echo string ;;
+    logtimezone) [[ $2 =~ ^[A-Za-z]+(/[A-Za-z0-9_+-]+){0,2}$ ]] && { [ "$2" = UTC ] || [ -f "/usr/share/zoneinfo/$2" ]; } && echo string ;;
+    loglevel) [[ $2 =~ ^[0-4]$ ]] && echo integer ;;
+    maintenance_window_start) [[ $2 =~ ^([0-9]|1[0-9]|2[0-3]|100)$ ]] && echo integer ;;
+    trashbin_retention_obligation|versions_retention_obligation) [[ $2 =~ $ret ]] && echo string ;;
+    preview_max_x|preview_max_y) [[ $2 =~ ^[0-9]{2,5}$ ]] && echo integer ;;
+    *) return 1 ;;
+  esac
+}
+
 php_value_ok() {
   case "$1" in
     memory_limit) [[ $2 =~ ^(-1|[0-9]{1,6}[KMGkmg]?)$ ]] ;;
@@ -515,11 +535,15 @@ case "$ACTION" in
    f_redis=; tmpfile f_redis; nc_redis_creds | helper redis_info >"$f_redis"
    f_core=; tmpfile f_core; runocc config:list core >"$f_core" 2>/dev/null
    cron_line=$(crontab -l -u "$NCM_WEBUSER" 2>/dev/null | grep -v '^[[:space:]]*#' | grep -m1 'cron.php' || true)
-   # Alternativ in /etc/crontab oder /etc/cron.d/* (mit Benutzerfeld)
-   [ -n "$cron_line" ] || cron_line=$(grep -h -v '^[[:space:]]*#' /etc/crontab /etc/cron.d/* 2>/dev/null | grep -m1 'cron.php' || true)
+   cron_src=""; [ -n "$cron_line" ] && cron_src="Crontab von $NCM_WEBUSER (crontab -u $NCM_WEBUSER -e)"
+   # Alternativ in /etc/crontab oder /etc/cron.d/* (mit Benutzerfeld) – mit Datei und Zeile
+   if [ -z "$cron_line" ]; then
+     hit=$(grep -Hn -v '^[[:space:]]*#' /etc/crontab /etc/cron.d/* 2>/dev/null | grep -m1 'cron.php' || true)
+     if [ -n "$hit" ]; then cron_src="$(cut -d: -f1-2 <<<"$hit")"; cron_line="$(cut -d: -f3- <<<"$hit")"; fi
+   fi
    timer=$(systemctl list-timers --all --no-legend 2>/dev/null | grep -i -m1 'nextcloud' | awk '{for(i=1;i<=NF;i++) if ($i ~ /\.timer$/) print $i}' || true)
    cfg=$(nc_config)
-   json_out db:jsonfile "$f_db" redis:jsonfile "$f_redis" core:jsonfile "$f_core" cron_entry "$cron_line" cron_timer "$timer" \
+   json_out db:jsonfile "$f_db" redis:jsonfile "$f_redis" core:jsonfile "$f_core" cron_entry "$cron_line" cron_src "$cron_src" cron_timer "$timer" \
      redis_service "$( (systemctl is-active --quiet redis-server || systemctl is-active --quiet redis) 2>/dev/null && echo active || echo inactive)" \
      memcache_local "$(printf '%s' "$cfg" | json_get memcache.local)" memcache_distributed "$(printf '%s' "$cfg" | json_get memcache.distributed)" \
      memcache_locking "$(printf '%s' "$cfg" | json_get memcache.locking)" ;;
@@ -840,6 +864,47 @@ case "$ACTION" in
    web_test "$SRV" || { echo 'FEHLER: Konfigurationstest fehlgeschlagen – der Webserver wurde NICHT neu geladen.'; exit 68; }
    web_reload_service "$SRV" || { echo "FEHLER: $SRV konnte nicht neu geladen werden."; exit 69; }
    echo "$SRV neu geladen." ;;
+
+ config_info)
+   f_cfg=; tmpfile f_cfg; f_smp=; tmpfile f_smp
+   # Geheimnisse werden ausgeblendet, bevor irgendetwas den Wrapper verlässt.
+   runocc config:list system --private 2>/dev/null | helper config_mask >"$f_cfg"
+   # Die Beispieldatei liegt im Nextcloud-Ordner (für www-data beschreibbar) – nur als Webserver-Benutzer lesen.
+   runuser -u "$NCM_WEBUSER" -- python3 "$HELPER" config_sample "$NCM_NC_PATH/config/config.sample.php" >"$f_smp"
+   # Fundort je Schlüssel (Datei und Zeile). Später geladene *.config.php überschreiben config.php – wie in Nextcloud.
+   f_src=; tmpfile f_src
+   runuser -u "$NCM_WEBUSER" -- "$NCM_PHP" -r '
+$d = $argv[1]; $o = []; $q = "[\x27\x22]";
+foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as $f) {
+  if (!is_readable($f)) { continue; }
+  $CONFIG = []; include $f; $txt = (string) @file_get_contents($f);
+  foreach (array_keys($CONFIG) as $k) {
+    $line = 0;
+    $kq = $q . preg_quote((string) $k, "/") . $q . "\\s*=>";
+    if (preg_match("/^\\s*" . $kq . "/m", $txt, $m, PREG_OFFSET_CAPTURE) || preg_match("/" . $kq . "/", $txt, $m, PREG_OFFSET_CAPTURE)) {
+      $line = substr_count(substr($txt, 0, $m[0][1]), "\n") + 1;
+    }
+    $o[$k] = ["file" => $f, "line" => $line];
+  }
+}
+echo json_encode($o, JSON_UNESCAPED_SLASHES);' -- "$NCM_NC_PATH/config" >"$f_src" 2>/dev/null
+   json_out config:jsonfile "$f_cfg" sample:jsonfile "$f_smp" sources:jsonfile "$f_src" \
+     status:json "$(runocc status --output=json 2>/dev/null)" nc_path "$NCM_NC_PATH" hostname "$(hostname -f 2>/dev/null || hostname)" ;;
+
+ config_set)
+   take_lock
+   KEY="${2:-}"; VAL="${3:-}"
+   config_key_ok "$KEY" || { echo "Schlüssel nicht erlaubt: $KEY"; exit 65; }
+   TYPE=$(config_value_ok "$KEY" "$VAL") || { echo "Ungültiger Wert für $KEY: $VAL"; exit 65; }
+   runocc config:system:set "$KEY" --value="$VAL" --type="$TYPE" || exit 1
+   echo "Gesetzt: $KEY = $VAL" ;;
+
+ config_reset)
+   take_lock
+   KEY="${2:-}"
+   config_key_ok "$KEY" || { echo "Schlüssel nicht erlaubt: $KEY"; exit 65; }
+   runocc config:system:delete "$KEY" || exit 1
+   echo "Entfernt: $KEY – es gilt wieder der Nextcloud-Standard." ;;
 
  *) echo 'Nicht erlaubte Aktion.'; exit 64 ;;
 esac

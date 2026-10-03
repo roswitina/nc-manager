@@ -1,0 +1,192 @@
+{
+ "config": {
+  "system": {
+   "instanceid": "oc123",
+   "passwordsalt": "••• ausgeblendet",
+   "secret": "••• ausgeblendet",
+   "trusted_domains": [
+    "localhost",
+    "cloud.example.org"
+   ],
+   "datadirectory": "/srv/data",
+   "dbtype": "mysql",
+   "dbhost": "localhost",
+   "dbname": "nextcloud",
+   "dbpassword": "••• ausgeblendet",
+   "version": "31.0.9.1",
+   "memcache.local": "\\OC\\Memcache\\APCu",
+   "loglevel": 0,
+   "debug": true,
+   "altes_ding": true,
+   "tippfehler_schluessel": "x",
+   "enabledPreviewProviders": [
+    "OC\\Preview\\PNG"
+   ],
+   "<script>": "<b>x</b>"
+  }
+ },
+ "sample": {
+  "sections": [
+   "Default Parameters",
+   "Logging"
+  ],
+  "options": {
+   "instanceid": {
+    "section": "Default Parameters",
+    "desc": "Unique id.",
+    "example": "''",
+    "default": "",
+    "order": 1,
+    "deprecated": false
+   },
+   "passwordsalt": {
+    "section": "Default Parameters",
+    "desc": "Salt.\n\n@deprecated legacy",
+    "example": "''",
+    "default": "",
+    "order": 2,
+    "deprecated": true
+   },
+   "secret": {
+    "section": "Default Parameters",
+    "desc": "Secret.",
+    "example": "''",
+    "default": "",
+    "order": 3,
+    "deprecated": false
+   },
+   "trusted_domains": {
+    "section": "Default Parameters",
+    "desc": "Trusted domains.",
+    "example": "[]",
+    "default": "",
+    "order": 4,
+    "deprecated": false
+   },
+   "datadirectory": {
+    "section": "Default Parameters",
+    "desc": "Data dir.",
+    "example": "''",
+    "default": "data/ in the Nextcloud directory",
+    "order": 5,
+    "deprecated": false
+   },
+   "dbtype": {
+    "section": "Default Parameters",
+    "desc": "Db type.",
+    "example": "'sqlite3'",
+    "default": "sqlite3",
+    "order": 6,
+    "deprecated": false
+   },
+   "loglevel": {
+    "section": "Logging",
+    "desc": "Loglevel to start logging at.",
+    "example": "2",
+    "default": "2",
+    "order": 7,
+    "deprecated": false
+   },
+   "altes_ding": {
+    "section": "Logging",
+    "desc": "Old.\n\n@deprecated",
+    "example": "true",
+    "default": "",
+    "order": 8,
+    "deprecated": true
+   },
+   "default_phone_region": {
+    "section": "Logging",
+    "desc": "Phone region for numbers.",
+    "example": "'GB'",
+    "default": "",
+    "order": 9,
+    "deprecated": false
+   },
+   "enabledPreviewProviders": {
+    "section": "Logging",
+    "desc": "Preview providers.",
+    "example": "[]",
+    "default": "",
+    "order": 10,
+    "deprecated": false
+   }
+  }
+ },
+ "sources": {
+  "instanceid": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 2
+  },
+  "passwordsalt": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 3
+  },
+  "secret": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 4
+  },
+  "trusted_domains": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 5
+  },
+  "datadirectory": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 6
+  },
+  "dbtype": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 7
+  },
+  "dbhost": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 8
+  },
+  "dbname": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 9
+  },
+  "dbpassword": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 10
+  },
+  "version": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 11
+  },
+  "loglevel": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 12
+  },
+  "debug": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 13
+  },
+  "altes_ding": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 14
+  },
+  "tippfehler_schluessel": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 15
+  },
+  "enabledPreviewProviders": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 16
+  },
+  "<script>": {
+   "file": "/var/www/nextcloud/config/config.php",
+   "line": 17
+  },
+  "memcache.local": {
+   "file": "/var/www/nextcloud/config/dietpi.config.php",
+   "line": 4
+  }
+ },
+ "status": {
+  "versionstring": "31.0.9",
+  "maintenance": false
+ },
+ "nc_path": "/var/www/nextcloud",
+ "hostname": "cloudpi"
+}

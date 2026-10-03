@@ -51,3 +51,27 @@ document.addEventListener('submit', function (e) {
     input.select();
   });
 })();
+
+// config.php-Katalog: Suche über Schlüssel und Beschreibung.
+(function () {
+  var q = document.getElementById('catalog-search');
+  if (!q) return;
+  var items = document.querySelectorAll('[data-search]'), count = document.getElementById('catalog-count');
+  q.addEventListener('input', function () {
+    var t = q.value.trim().toLowerCase(), n = 0;
+    items.forEach(function (el) {
+      var hit = !t || el.getAttribute('data-search').indexOf(t) !== -1;
+      el.hidden = !hit; if (hit) n++;
+    });
+    document.querySelectorAll('.catalog-group').forEach(function (g) {
+      g.hidden = !g.querySelector('[data-search]:not([hidden])');
+      if (t) g.open = true;
+    });
+    if (count) count.textContent = n + ' Treffer';
+  });
+})();
+
+// Druckansicht: Knopf „Drucken / als PDF speichern“.
+document.querySelectorAll('[data-print]').forEach(function (b) {
+  b.addEventListener('click', function () { window.print(); });
+});

@@ -1,0 +1,95 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+{% extends 'base.html' %}
+{% from 'macros.html' import metric, csrf %}
+{% block body %}
+{% if err %}<div class="card"><pre>{{ err }}</pre></div>{% endif %}
+<div class="card"><h2>config.php</h2>
+  <p class="muted">Alle Einstellungen dieser Nextcloud – auch aus zusätzlichen <span class="mono">*.config.php</span>-Dateien –
+    erklärt mit der Beschreibung aus <span class="mono">config.sample.php</span> der installierten Version.
+    Passwörter, Schlüssel und Tokens werden ausgeblendet.</p>
+  {{ metric('Nextcloud', (info.version or '–') ~ ' · ' ~ info.nc_path) }}
+  {{ metric('Einstellungen', info.count ~ ' gesetzt · davon ' ~ info.critical ~ ' kritisch · ' ~ info.documented ~ ' in der Doku beschrieben') }}
+  {% if info.sample_error %}<p class="bad">⚠ config.sample.php nicht lesbar ({{ info.sample_error }}) – Beschreibungen fehlen.</p>{% endif %}
+  <p><a class="btn" href="{{ url_for('config_print') }}" target="_blank" rel="noopener">Druckansicht für diese Instanz öffnen</a>
+    <a class="btn" href="{{ url_for('report_page') }}" target="_blank" rel="noopener">Systembericht</a>
+    <span class="muted small">– Druckansicht: nur config.php, kritische Einstellungen zuerst · Systembericht: config.php, PHP, PHP-FPM,
+      Webserver, Cron, Datenbank und Redis mit Datei und Zeile.</span></p>
+</div>
+
+<div class="card"><h2>Empfehlungen</h2>
+  {% if not recs %}<p class="ok">✓ Keine Hinweise – die wichtigsten Einstellungen sind gesetzt.</p>{% else %}
+  <div class="scroll"><table>
+    <thead><tr><th>Einstellung</th><th>Aktuell</th><th>Empfehlung</th><th>Warum</th><th></th></tr></thead>
+    <tbody>{% for r in recs %}
+      <tr><td class="mono nowrap">{{ r.key }}</td>
+        <td>{% if r.state == 'bad' %}<span class="bad">✗</span>{% elif r.state == 'warn' %}<span class="diff">⚠</span>{% else %}<span class="muted">ⓘ</span>{% endif %} {{ r.current }}</td>
+        <td class="mono small">{{ r.rec }}</td>
+        <td class="small">{{ r.note }}<div><a href="{{ doc[1] }}" target="_blank" rel="noopener noreferrer">{{ doc[0] }} ↗</a></div></td>
+        <td>{% if r.set_value %}<a class="small-btn btn" href="#set-{{ r.key }}">Setzen …</a>{% endif %}</td></tr>
+      {% if r.fix %}<tr class="fixrow"><td colspan="5"><details><summary>Vorschlag (in config.php bzw. als Befehl)</summary><pre class="snippet">{{ r.fix }}</pre></details></td></tr>{% endif %}
+    {% endfor %}</tbody>
+  </table></div>{% endif %}
+</div>
+
+<div class="card" id="set"><h2>Einstellungen ändern</h2>
+  <p class="muted">Nur diese harmlosen Einstellungen lassen sich hier ändern. Der Manager verwendet dafür
+    <span class="mono">occ config:system:set</span> als Webserver-Benutzer und bearbeitet config.php nie direkt.
+    Kritische Einstellungen (Datenbank, Datenverzeichnis, Domains, Caching …) werden nur angezeigt.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Einstellung</th><th>Aktuell</th><th>Standard</th><th>Neuer Wert</th><th></th></tr></thead>
+    <tbody>{% for s in settable %}
+      <tr id="set-{{ s.key }}"><td class="mono">{{ s.key }}<div class="muted small">{{ s.hint }}</div></td>
+        <td>{{ s.current or '–' }}</td><td class="small">{{ s.default or '–' }}</td>
+        <td><form class="inline-form" method="post" action="{{ url_for('config_set') }}" data-confirm="{{ s.key }} setzen?">
+          {{ csrf() }}<input type="hidden" name="key" value="{{ s.key }}">
+          <input name="value" value="{{ s.current or s.ex }}" maxlength="40" aria-label="Neuer Wert für {{ s.key }}">
+          <button class="small-btn"{% if running %} disabled{% endif %}>Setzen</button></form></td>
+        <td>{% if s.current %}<form method="post" action="{{ url_for('config_reset') }}" data-confirm="{{ s.key }} entfernen? Danach gilt der Nextcloud-Standard.">
+          {{ csrf() }}<input type="hidden" name="key" value="{{ s.key }}"><button class="small-btn"{% if running %} disabled{% endif %}>Standard</button></form>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+</div>
+
+<div class="card"><h2>Deine Einstellungen</h2>
+  <p class="muted small"><span class="tag tag-crit">kritisch</span> nur anzeigen – eine falsche Änderung kann Nextcloud unerreichbar machen ·
+    <span class="tag tag-set">änderbar</span> oben unter „Einstellungen ändern“ ·
+    <span class="tag tag-unk">nicht beschrieben</span> nicht in config.sample.php (App-Einstellung oder Tippfehler) ·
+    <span class="tag tag-dep">veraltet</span></p>
+  {% for sec, rows in groups.items() %}
+  <h3 class="group">{{ sec }}</h3>
+  <div class="scroll"><table class="cfg">
+    <tbody>{% for r in rows %}
+      <tr><td class="mono key">{{ r.key }}
+          {% if r.critical %}<span class="tag tag-crit">kritisch</span>{% endif %}{% if r.settable %}<span class="tag tag-set">änderbar</span>{% endif %}
+          {% if not r.documented %}<span class="tag tag-unk">nicht beschrieben</span>{% endif %}{% if r.deprecated %}<span class="tag tag-dep">veraltet</span>{% endif %}</td>
+        <td>{% if r.complex %}<pre class="snippet">{{ r.value }}</pre>{% else %}<span class="mono">{{ r.value }}</span>{% endif %}
+          {% if r.default %}<div class="muted small">Standard: {{ r.default }}</div>{% endif %}
+          {% if r.src %}<div class="muted small mono">{{ r.src }}</div>{% endif %}
+          {% if r.de %}<div class="small">{{ r.de }}</div>{% endif %}
+          {% if r.desc %}<details><summary class="small">Beschreibung (config.sample.php, englisch)</summary><pre class="desc">{{ r.desc }}</pre></details>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% endfor %}
+</div>
+
+<div class="card"><h2>Alle verfügbaren Einstellungen</h2>
+  <p class="muted">{{ info.documented }} Einstellungen laut config.sample.php dieser Nextcloud-Version. ✓ = bei dir gesetzt.
+    <a href="{{ doc[1] }}" target="_blank" rel="noopener noreferrer">{{ doc[0] }} ↗</a></p>
+  <p><input id="catalog-search" type="search" placeholder="Suchen, z. B. preview, mail, redis …" aria-label="Einstellungen durchsuchen">
+    <span id="catalog-count" class="muted small"></span></p>
+  {% for sec, items in catalog.items() %}
+  <details class="catalog-group"><summary>{{ sec }} <span class="muted small">({{ items|length }})</span></summary>
+    {% for c in items %}
+    <div class="catalog-item" data-search="{{ (c.key ~ ' ' ~ c.desc)|lower }}">
+      <details><summary><span class="mono">{{ c.key }}</span>{% if c.set %} <span class="ok">✓</span>{% endif %}
+        <span class="muted small">– {{ c.short }}</span></summary>
+        {% if c.default %}<div class="small">Standard: {{ c.default }}</div>{% endif %}
+        <pre class="desc">{{ c.desc }}</pre>
+        {% if c.example %}<div class="muted small">Beispiel aus der Doku:</div><pre class="snippet">'{{ c.key }}' => {{ c.example }},</pre>{% endif %}
+      </details>
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+</div>
+{% endblock %}

@@ -2,6 +2,30 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.8.0
+
+- **Neue Seite „config.php“.** Zeigt alle Einstellungen der Nextcloud – auch aus zusätzlichen `*.config.php`-Dateien –
+  mit Datei und Zeile, gruppiert wie in der Doku und erklärt mit der Beschreibung aus `config.sample.php` der
+  installierten Version (kein Internet nötig, passt immer zur Version). Kritische Einstellungen haben eine kurze
+  deutsche Erklärung. Markiert werden kritische, änderbare, veraltete und nicht beschriebene Schlüssel (App-Einstellung
+  oder Tippfehler).
+  - **Empfehlungen** mit Ampel: default_phone_region, maintenance_window_start, memcache.local, memcache.locking,
+    debug, Wartungsmodus, overwrite.cli.url, loglevel, logtimezone, veraltete Schlüssel.
+  - **Ändern nur für harmlose Schlüssel** (default_phone_region, default_language, default_locale, logtimezone,
+    loglevel, maintenance_window_start, trashbin-/versions_retention_obligation, preview_max_x/y) – über
+    `occ config:system:set` als Webserver-Benutzer, mit Prüfung jedes Werts; „Standard“ entfernt den Eintrag wieder.
+    Datenbank, Datenverzeichnis, Domains, Caching usw. werden nur angezeigt.
+  - **Katalog aller Einstellungen** mit Suche.
+  - **Druckansicht** der config.php: kritische Einstellungen zuerst, schön formatiert, für A4 oder als PDF.
+- **Neuer Systembericht** (Dashboard und Seite config.php): alle wichtigen Einstellungen in einem druckbaren Dokument,
+  jeweils mit Fundort – config.php nach Datei und Zeile, PHP-Werte (Web und CLI) mit der INI-Datei des wirksamen
+  Werts, PHP-FPM-Pools mit Pool-Datei, Webserver mit Datei:Zeile, Cron-Eintrag mit Fundort, Datenbank, Redis, Caches
+  und eine Liste der wichtigen Dateien.
+- **Geheimnisse bleiben verborgen:** Passwörter, `secret`, `passwordsalt`, Schlüssel und Tokens blendet der Wrapper aus,
+  bevor Daten an die Web-App gehen. `config.sample.php` liest der Manager nur als Webserver-Benutzer und nur als Text.
+- Die Diagnose meldet beim Cron-Eintrag jetzt auch, wo er steht.
+- 9 neue Tests, insgesamt 90.
+
 ## 0.7.1
 
 - **Fehlerbehebung: Backup und Wiederherstellung brachen bei aktuellen Nextcloud-Versionen mit Exit-Code 38 ab**

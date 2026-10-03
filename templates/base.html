@@ -15,7 +15,7 @@
   <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="_csrf" value="{{ csrf_token() }}"><button class="danger small-btn">Abmelden</button></form>
 </div>
 <nav class="nav">
-  {% for ep, label in [('home','Dashboard'),('checks_page','Prüfungen'),('php_page','PHP'),('fpm_page','PHP-FPM'),('webserver_page','Webserver'),('apps_page','Apps'),('update_wizard','Update'),('backups_page','Backups'),('diagnose_page','Diagnose'),('maintenance','Wartung'),('logs_page','Logs'),('history','Protokoll')] %}
+  {% for ep, label in [('home','Dashboard'),('checks_page','Prüfungen'),('php_page','PHP'),('fpm_page','PHP-FPM'),('webserver_page','Webserver'),('config_page','config.php'),('apps_page','Apps'),('update_wizard','Update'),('backups_page','Backups'),('diagnose_page','Diagnose'),('maintenance','Wartung'),('logs_page','Logs'),('history','Protokoll')] %}
   <a href="{{ url_for(ep) }}"{% if request.endpoint == ep %} class="active"{% endif %}>{{ label }}</a>
   {% endfor %}
 </nav>

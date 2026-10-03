@@ -1,0 +1,69 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Konfiguration {{ info.host or info.hostname }} – {{ now }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='print.css') }}?v={{ VERSION }}">
+</head>
+<body>
+<div class="toolbar noprint">
+  <button type="button" data-print>Drucken / als PDF speichern</button>
+  <a href="{{ url_for('config_page') }}">← zurück zur Seite config.php</a>
+</div>
+<header>
+  <div class="kicker">Nextcloud · Konfiguration der Instanz</div>
+  <h1>{{ info.host or info.hostname }}</h1>
+  <table class="facts">
+    <tr><th>Nextcloud-Version</th><td>{{ info.version or '–' }}</td><th>Stand</th><td>{{ now }}</td></tr>
+    <tr><th>Programmordner</th><td class="mono">{{ info.nc_path }}</td><th>Server</th><td class="mono">{{ info.hostname }}</td></tr>
+    <tr><th>Datenverzeichnis</th><td class="mono">{{ info.datadir or '–' }}</td><th>Datenbank</th><td>{{ info.dbtype or '–' }}</td></tr>
+  </table>
+  <p class="note">Passwörter, Schlüssel und Tokens sind ausgeblendet (<span class="mono">{{ cfg_masked }}</span>) – sie stehen nur in
+    <span class="mono">{{ info.nc_path }}/config/config.php</span> und in den Backups des Managers.
+    Dieses Blatt sicher aufbewahren: Es enthält Adressen, Pfade und Datenbank-Namen dieser Installation.</p>
+</header>
+
+<section>
+  <h2>1 · Kritische Einstellungen</h2>
+  <p class="lead">Diese Werte braucht man bei einer Wiederherstellung oder einem Umzug. Eine falsche Änderung kann Nextcloud
+    unerreichbar machen – nur mit Backup und Bedacht ändern.</p>
+  <table class="settings">
+    <thead><tr><th class="k">Einstellung</th><th>Wert</th><th class="d">Bedeutung</th></tr></thead>
+    <tbody>{% for r in crit %}
+      <tr><td class="k mono">{{ r.key }}</td>
+        <td>{% if r.complex %}<pre>{{ r.value }}</pre>{% else %}<span class="mono">{{ r.value }}</span>{% endif %}</td>
+        <td class="d">{{ r.de }}</td></tr>
+    {% else %}<tr><td colspan="3">Keine kritischen Einstellungen gefunden.</td></tr>{% endfor %}</tbody>
+  </table>
+</section>
+
+<section>
+  <h2>2 · Weitere Einstellungen</h2>
+  {% for sec, rows in other.items() %}
+  <h3>{{ sec }}</h3>
+  <table class="settings">
+    <tbody>{% for r in rows %}
+      <tr><td class="k mono">{{ r.key }}{% if not r.documented %}<span class="badge">nicht in der Doku</span>{% endif %}</td>
+        <td>{% if r.complex %}<pre>{{ r.value }}</pre>{% else %}<span class="mono">{{ r.value }}</span>{% endif %}
+          {% if r.default %}<div class="def">Standard: {{ r.default }}</div>{% endif %}</td>
+        <td class="d">{{ r.de or r.short }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% endfor %}
+</section>
+
+{% if recs %}
+<section>
+  <h2>3 · Offene Empfehlungen</h2>
+  <ul class="recs">{% for r in recs %}<li><span class="mono">{{ r.key }}</span> – {{ r.note }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+<footer>Erstellt mit Nextcloud Server Manager {{ VERSION }} am {{ now }} · Beschreibungen: config.sample.php der installierten
+  Nextcloud-Version · Doku: {{ doc[1] }}</footer>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ VERSION }}" defer></script>
+</body>
+</html>

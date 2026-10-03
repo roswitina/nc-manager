@@ -443,6 +443,49 @@ def test_web_units(client):
     assert by['Interne Ordner gesperrt (config, data, lib …)']['state'] == 'bad'
 
 
+# ------------------------------------------------------------------ v0.8.0: config.php und Systembericht
+
+def test_config_page_recommendations_and_safety(client):
+    login(client)
+    html = client.get('/config').get_data(as_text=True)
+    assert '<script>' not in html.split('</nav>', 1)[1].split('<script src=')[0]            # Schlüssel/Werte maskiert
+    assert 'default_phone_region' in html and 'maintenance_window_start' in html            # fehlende Empfehlungen
+    assert 'tippfehler_schluessel' in html and 'nicht beschrieben' in html                  # unbekannter Schlüssel
+    assert 'Laut Doku nur für die Entwicklung' in html                                     # debug = true
+    rec = html[html.index('<h2>Empfehlungen'):html.index('<h2>Einstellungen ändern')]
+    assert 'altes_ding' in rec and 'passwordsalt' not in rec          # veraltet – aber nie kritische Schlüssel entfernen
+    assert '••• ausgeblendet' in html and 'dietpi.config.php:4' in html                     # Fundort je Schlüssel
+    assert 'name="key" value="loglevel"' in html and 'name="key" value="dbhost"' not in html # nur harmlose Schlüssel änderbar
+    assert 'OC\\Preview\\PNG' in html and 'OC\\\\Preview' not in html          # Backslashes wie in config.php, nicht verdoppelt
+    assert 'catalog-search' in html and 'Phone region for numbers.' in html
+
+
+def test_config_set_validated(client):
+    login(client)
+    for key, val in [('dbhost', 'evil'), ('loglevel', '9'), ('default_phone_region', 'at'),
+                     ('logtimezone', '../../etc'), ('trashbin_retention_obligation', 'immer')]:
+        assert post(client, '/config', '/config/set', key=key, value=val).status_code == 400, key
+    assert post(client, '/config', '/config/reset', key='datadirectory').status_code == 400
+    r = post(client, '/config', '/config/set', key='default_phone_region', value='AT')
+    assert wait_job(client, r.headers['Location'])['output'] == 'config_set default_phone_region AT'
+    r = post(client, '/config', '/config/reset', key='loglevel')
+    assert wait_job(client, r.headers['Location'])['output'] == 'config_reset loglevel'
+
+
+def test_config_print_and_system_report(client):
+    login(client)
+    html = client.get('/config/print').get_data(as_text=True)
+    assert 'Kritische Einstellungen' in html and 'cloud.example.org' not in html.split('<h1>')[0]
+    crit = html[html.index('1 · Kritische'):html.index('2 · Weitere')]
+    assert crit.index('instanceid') < crit.index('trusted_domains') < crit.index('datadirectory')
+    assert 'loglevel' not in crit and '••• ausgeblendet' in crit
+    rep = client.get('/report').get_data(as_text=True)
+    for part in ('1 · Nextcloud – config.php', '2 · PHP', '3 · PHP-FPM', '4 · Webserver', '5 · Hintergrundjobs', '6 · Wichtige Dateien'):
+        assert part in rep, part
+    assert '/var/www/nextcloud/config/dietpi.config.php' in rep and 'pool.d/www.conf' in rep
+    assert '10.11.6-MariaDB' in rep and 'data-print' in rep and 'Systembericht drucken' in client.get('/').get_data(as_text=True)
+
+
 def test_restore_needs_typed_confirmation(client):
     login(client)
     t = csrf(client, '/backups/20261002-120000/restore')

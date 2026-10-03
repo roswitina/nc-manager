@@ -1,0 +1,42 @@
+/* Nextcloud Server Manager · Druckansicht der Konfiguration · SPDX-License-Identifier: MIT */
+:root{--ink:#16202c;--muted:#5d6b7a;--line:#d7dee6;--accent:#0b5cad;--soft:#f3f6f9;--crit:#a3242e}
+*{box-sizing:border-box}
+body{font-family:"Inter","DejaVu Sans",system-ui,sans-serif;color:var(--ink);background:#fff;margin:0 auto;max-width:980px;padding:28px 32px;font-size:10.5pt;line-height:1.45}
+.toolbar{display:flex;gap:16px;align-items:center;margin-bottom:22px;padding:10px 14px;background:var(--soft);border:1px solid var(--line);border-radius:10px}
+.toolbar button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:600;cursor:pointer}
+.toolbar a{color:var(--accent)}
+header{border-bottom:2.5px solid var(--accent);padding-bottom:10px;margin-bottom:18px}
+.kicker{text-transform:uppercase;letter-spacing:.08em;font-size:8.5pt;color:var(--muted);font-weight:600}
+h1{font-size:22pt;margin:2px 0 10px;color:var(--accent);word-break:break-all}
+h2{font-size:14pt;color:var(--accent);border-bottom:1px solid var(--line);padding-bottom:3px;margin:22px 0 8px;break-after:avoid}
+h3{font-size:10.5pt;margin:14px 0 4px;color:var(--ink);text-transform:uppercase;letter-spacing:.04em;break-after:avoid}
+.facts{border-collapse:collapse;width:100%;font-size:9.5pt;margin:4px 0 8px}
+.facts th{text-align:left;color:var(--muted);font-weight:600;padding:2px 10px 2px 0;white-space:nowrap;width:1%}
+.facts td{padding:2px 18px 2px 0}
+.note{font-size:8.8pt;color:var(--muted);margin:6px 0 0}
+.lead{margin:0 0 6px;color:var(--muted);font-size:9.5pt}
+table.settings{border-collapse:collapse;width:100%;font-size:9pt;margin-bottom:6px}
+table.settings th{background:var(--accent);color:#fff;text-align:left;padding:4px 7px;font-weight:600}
+table.settings td{border-bottom:.6pt solid var(--line);padding:4px 7px;vertical-align:top}
+table.settings tr{break-inside:avoid}
+table.settings td.k{width:28%;font-weight:600}
+table.settings td.d{width:40%;color:#33414f}
+section:first-of-type table.settings td.k{color:var(--crit)}
+.mono,pre{font-family:"DejaVu Sans Mono",ui-monospace,Menlo,Consolas,monospace;font-size:8.4pt;word-break:break-all}
+pre{margin:0;white-space:pre-wrap;background:var(--soft);padding:4px 6px;border-radius:4px}
+.def{color:var(--muted);font-size:8pt;margin-top:2px}
+.badge{display:inline-block;margin-left:6px;font-family:inherit;font-size:7.5pt;font-weight:600;color:#5b4b8a;background:#ece8f6;border-radius:8px;padding:0 6px}
+.recs{padding-left:18px;font-size:9.3pt}.recs li{margin:3px 0}
+footer{margin-top:24px;padding-top:8px;border-top:1px solid var(--line);color:var(--muted);font-size:8pt}
+@page{size:A4;margin:16mm 14mm}
+@media print{.noprint{display:none}body{padding:0;max-width:none}a{color:inherit;text-decoration:none}}
+table.settings td.ln,table.settings th.ln{width:5%;text-align:right;color:var(--muted)}
+table.settings td.crit{color:var(--crit)}
+.crit-mark{color:var(--crit);font-weight:600}
+h3.file{text-transform:none;letter-spacing:0;font-size:9.5pt;background:var(--soft);padding:4px 8px;border-left:3px solid var(--accent)}
+.toc{columns:2;font-size:9.5pt;margin:8px 0 0;padding-left:20px;color:var(--muted)}
+.small{font-size:8pt}
+body.report section:first-of-type table.settings td.k{color:inherit}
+body.report table.settings td.k.crit{color:var(--crit)}
+table.settings th.ln{color:#fff}
+body.report section:first-of-type table.settings td.k.crit{color:var(--crit)}

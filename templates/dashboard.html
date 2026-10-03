@@ -4,7 +4,8 @@
 {% block body %}
 <div class="card"><div class="top">
   <div><div class="muted">NEXTCLOUD</div><h1>{{ st.versionstring or '–' }}</h1><div class="muted">{{ x.nc_path }}</div></div>
-  <div>{{ pill(not maint and not dbup, 'Betriebsbereit', 'Prüfen') }}</div>
+  <div>{{ pill(not maint and not dbup, 'Betriebsbereit', 'Prüfen') }}
+    <div><a class="small-btn btn" href="{{ url_for('report_page') }}" target="_blank" rel="noopener">Systembericht drucken</a></div></div>
 </div></div>
 <div class="dash">
 <div class="card"><h2>Betrieb</h2>

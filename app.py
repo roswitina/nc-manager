@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 import jobs
 
-VERSION = '0.7.1'
+VERSION = '0.8.0'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -83,6 +83,8 @@ ACTION_LABELS.update({
     'web_enmod': 'Apache-Modul einschalten',
     'web_reload': 'Webserver neu laden',
     'web_info': 'Webserver-Konfiguration',
+    'config_set': 'config.php: Wert setzen',
+    'config_reset': 'config.php: Standard wiederherstellen',
 })
 # Rücksprung von der Job-Seite
 ACTION_PAGES = {'php_set': 'php_page', 'fpm_set': 'fpm_page', 'app_update': 'apps_page',
@@ -90,7 +92,8 @@ ACTION_PAGES = {'php_set': 'php_page', 'fpm_set': 'fpm_page', 'app_update': 'app
                 'backup_full': 'backups_page', 'backup_verify': 'backups_page', 'restore_backup': 'backups_page',
                 'log_archive': 'logs_page', 'log_rotate_set': 'logs_page', 'log_level_set': 'logs_page',
                 'nextcloud_update': 'update_wizard', 'update_check': 'update_wizard',
-                'web_enmod': 'webserver_page', 'web_reload': 'webserver_page'}
+                'web_enmod': 'webserver_page', 'web_reload': 'webserver_page',
+                'config_set': 'config_page', 'config_reset': 'config_page'}
 # Diese Jobs ändern nichts am Zustand, den Setup-Checks/App-Liste beschreiben.
 CACHE_NEUTRAL = {'backup', 'backup_full', 'backup_verify', 'backup_delete', 'update_check', 'log_archive'}
 # Kurzzeit-Cache für häufige, langsame Abfragen (Datei-Cache, gilt für alle Gunicorn-Worker).
@@ -828,6 +831,306 @@ def webserver_reload():
     if srv not in ('apache2', 'nginx'):
         abort(400)
     return start('web_reload', [srv])
+
+
+# --------------------------------------------------------------------------- config.php (anzeigen, erklären, drucken)
+
+CONFIG_DOC = ('Nextcloud-Doku: Konfigurationsparameter',
+              f'{DOC}/configuration_server/config_sample_php_parameters.html')
+MASKED = '••• ausgeblendet'
+# Harmlose Schlüssel, die die Oberfläche setzen darf (identisch im Wrapper, dort erneut geprüft).
+CONFIG_SETTABLE = {
+    'default_phone_region': dict(rx=r'[A-Z]{2}', hint='Ländercode nach ISO 3166-1, z. B. AT, DE, CH', ex='AT'),
+    'default_language': dict(rx=r'[a-z]{2,3}(_[A-Z][a-z]{3})?(_[A-Z]{2})?', hint='z. B. de, de_DE', ex='de'),
+    'default_locale': dict(rx=r'[a-z]{2,3}(_[A-Z][a-z]{3})?(_[A-Z]{2})?', hint='z. B. de_AT, de_DE', ex='de_AT'),
+    'logtimezone': dict(rx=r'[A-Za-z]+(/[A-Za-z0-9_+-]+){0,2}', hint='z. B. Europe/Vienna, UTC', ex='Europe/Vienna'),
+    'loglevel': dict(rx=r'[0-4]', hint='0 Debug, 1 Info, 2 Warnung, 3 Fehler, 4 Fatal', ex='2'),
+    'maintenance_window_start': dict(rx=r'[0-9]|1[0-9]|2[0-3]|100', hint='Stunde in UTC (0–23), 100 = aus', ex='1'),
+    'trashbin_retention_obligation': dict(rx=r'auto|disabled|auto, ?[0-9]{1,4}|[0-9]{1,4}, ?auto|[0-9]{1,4}, ?[0-9]{1,4}',
+                                          hint='auto, „auto, 30“, „7, 30“ oder disabled', ex='auto, 30'),
+    'versions_retention_obligation': dict(rx=r'auto|disabled|auto, ?[0-9]{1,4}|[0-9]{1,4}, ?auto|[0-9]{1,4}, ?[0-9]{1,4}',
+                                          hint='auto, „auto, 365“, „30, 365“ oder disabled', ex='auto, 365'),
+    'preview_max_x': dict(rx=r'[0-9]{2,5}', hint='Pixel', ex='2048'),
+    'preview_max_y': dict(rx=r'[0-9]{2,5}', hint='Pixel', ex='2048'),
+}
+# Kritisch: eine falsche Änderung kann Nextcloud unerreichbar machen oder Daten unauffindbar. Nur anzeigen.
+CONFIG_CRITICAL = {
+    'instanceid': 'Eindeutige Kennung der Installation. Nie ändern – sonst gehen Caches, Sitzungen und Teile der Verschlüsselung verloren.',
+    'passwordsalt': 'Salz für ältere Passwort-Hashes. Geht es verloren, funktionieren alte Passwörter nicht mehr.',
+    'secret': 'Geheimer Schlüssel für Verschlüsselung und Tokens. Geht er verloren, sind verschlüsselte Daten unlesbar.',
+    'trusted_domains': 'Adressen, unter denen Nextcloud erreichbar sein darf. Fehlt die richtige, erscheint „Zugriff über nicht vertrauenswürdige Domain“.',
+    'datadirectory': 'Ordner mit allen Benutzerdateien. Ein falscher Wert lässt Nextcloud ohne Dateien starten.',
+    'dbtype': 'Art der Datenbank (mysql, pgsql, sqlite3).',
+    'dbhost': 'Rechner (und ggf. Port oder Socket) der Datenbank.',
+    'dbname': 'Name der Nextcloud-Datenbank.',
+    'dbuser': 'Benutzer, mit dem Nextcloud sich an der Datenbank anmeldet.',
+    'dbpassword': 'Passwort des Datenbank-Benutzers (hier ausgeblendet; steht nur in config.php).',
+    'dbport': 'Port der Datenbank, falls nicht Standard.',
+    'dbtableprefix': 'Präfix aller Nextcloud-Tabellen (meist oc_). Nie nachträglich ändern.',
+    'mysql.utf8mb4': 'Datenbank nutzt 4-Byte-UTF-8 (nötig für Emojis).',
+    'version': 'Installierte Nextcloud-Version – wird vom Updater gepflegt, nie von Hand ändern.',
+    'installed': 'Kennzeichen „Installation abgeschlossen“. Bei false startet der Installationsassistent.',
+    'overwrite.cli.url': 'Basis-Adresse für Links, die Hintergrundjobs und occ erzeugen (z. B. in Mails).',
+    'overwritehost': 'Erzwungener Hostname – meist nur hinter einem Reverse-Proxy nötig.',
+    'overwriteprotocol': 'Erzwungenes Protokoll (https) – meist hinter einem Reverse-Proxy.',
+    'overwritewebroot': 'Erzwungener Unterpfad, z. B. /nextcloud.',
+    'overwritecondaddr': 'Bedingung, wann die overwrite-Einstellungen gelten.',
+    'htaccess.RewriteBase': 'Basis für Pretty URLs (Adressen ohne /index.php/).',
+    'trusted_proxies': 'Reverse-Proxys, deren Weiterleitungs-Header Nextcloud vertraut.',
+    'forwarded_for_headers': 'Header, aus denen hinter einem Proxy die Besucher-IP gelesen wird.',
+    'memcache.local': 'Lokaler Cache (meist APCu). Ein Wert für ein nicht installiertes Modul legt Nextcloud lahm.',
+    'memcache.distributed': 'Verteilter Cache (meist Redis).',
+    'memcache.locking': 'Cache für Dateisperren (meist Redis).',
+    'redis': 'Verbindung zu Redis (Host, Port, Passwort ausgeblendet).',
+    'redis.cluster': 'Verbindung zu einem Redis-Cluster.',
+    'objectstore': 'Objektspeicher (S3 o. Ä.) als Hauptspeicher. Zugangsdaten ausgeblendet.',
+    'objectstore.multibucket': 'Objektspeicher mit mehreren Buckets.',
+    'apps_paths': 'Ordner, in denen Apps liegen.',
+    'maintenance': 'Wartungsmodus. Bei true ist Nextcloud für alle gesperrt.',
+}
+CONFIG_SECTION_DE = {
+    'Default Parameters': 'Grundeinstellungen', 'User Experience': 'Benutzeroberfläche', 'User session': 'Sitzungen',
+    'Mail Parameters': 'E-Mail', 'Proxy Configurations': 'Proxy und Adressen', 'Deleted Items (trash bin)': 'Papierkorb',
+    'File versions': 'Dateiversionen', 'Nextcloud Verifications': 'Prüfungen', 'Logging': 'Protokollierung',
+    'Alternate Code Locations': 'Weitere Code-Orte', 'Apps': 'Apps', 'Previews': 'Vorschaubilder', 'LDAP': 'LDAP',
+    'Comments': 'Kommentare', 'Maintenance': 'Wartung', 'SSL': 'SSL', 'Memory caching backend configuration': 'Caching',
+    'Using Object Store with Nextcloud': 'Objektspeicher', 'Sharing': 'Freigaben', 'Federated Cloud Sharing': 'Föderation',
+    'Hashing': 'Hashing', 'All other configuration options': 'Weitere Einstellungen',
+}
+
+
+def config_fmt(v):
+    """Wert lesbar: Zeichenketten ohne Anführungszeichen, Arrays als eingerücktes JSON."""
+    if isinstance(v, bool):
+        return 'true' if v else 'false'
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, indent=2, ensure_ascii=False).replace('\\\\', '\\')   # \\OC\\… wie in config.php: \OC\…
+    return '' if v is None else str(v)
+
+
+def config_short(desc):
+    """Erster Satz der englischen Beschreibung (RST-Markierungen entfernt)."""
+    d = re.sub(r'``([^`]+)``', r'\1', ' '.join((desc or '').split()))
+    m = re.match(r'(.+?[.!?])(\s|$)', d)
+    s = m.group(1) if m else d
+    return s if len(s) <= 180 else s[:177].rsplit(' ', 1)[0] + ' …'
+
+
+def config_recommendations(cfg, opts):
+    rows = []
+
+    def row(key, state, current, rec, note, fix=None, set_value=None):
+        rows.append(dict(key=key, state=state, current=current, rec=rec, note=note, fix=fix,
+                         set_value=set_value if key in CONFIG_SETTABLE else None))
+    if not cfg.get('default_phone_region'):
+        row('default_phone_region', 'warn', 'nicht gesetzt', 'Ländercode, z. B. AT',
+            'Ohne Standard-Region akzeptiert Nextcloud Telefonnummern nur mit Ländervorwahl; die Prüfungen melden das.',
+            set_value='AT')
+    mws = cfg.get('maintenance_window_start')
+    if mws in (None, '', 100, '100'):
+        row('maintenance_window_start', 'warn', 'nicht gesetzt' if mws in (None, '') else '100 (aus)', 'z. B. 1 (= 01:00 UTC)',
+            'Ohne Wartungsfenster laufen aufwendige tägliche Hintergrundjobs zu beliebiger Zeit; die Prüfungen melden das.',
+            set_value='1')
+    ml = cfg.get('memcache.local')
+    if not ml:
+        row('memcache.local', 'warn', 'nicht gesetzt', '\\OC\\Memcache\\APCu',
+            'Ohne lokalen Cache ist Nextcloud spürbar langsamer; die Prüfungen melden das. Vorher muss das PHP-Modul APCu '
+            'installiert sein (z. B. Paket php-apcu) – sonst startet Nextcloud nicht mehr.',
+            fix="'memcache.local' => '\\\\OC\\\\Memcache\\\\APCu',")
+    if not cfg.get('memcache.locking'):
+        row('memcache.locking', 'info', 'nicht gesetzt', '\\OC\\Memcache\\Redis',
+            'Dateisperren laufen dann über die Datenbank. Mit Redis ist das schneller; nötig ist ein laufender Redis-Server '
+            'und der Eintrag „redis“.' + (' Redis ist bereits eingetragen.' if cfg.get('redis') else ''),
+            fix="'memcache.locking' => '\\\\OC\\\\Memcache\\\\Redis',")
+    if cfg.get('debug') in (True, 'true', 1):
+        row('debug', 'bad', 'true', 'false (bzw. entfernen)',
+            'Laut Doku nur für die Entwicklung: verlangsamt Nextcloud und kann interne Informationen preisgeben.',
+            fix="sudo -u www-data php occ config:system:delete debug")
+    if cfg.get('maintenance') in (True, 'true', 1):
+        row('maintenance', 'warn', 'true', 'false',
+            'Der Wartungsmodus ist aktiv – Nextcloud ist für alle Benutzer gesperrt. Ausschalten unter „Wartung“.')
+    if not cfg.get('overwrite.cli.url'):
+        row('overwrite.cli.url', 'warn', 'nicht gesetzt', 'https://cloud.example.org',
+            'Hintergrundjobs und occ kennen dann die eigene Adresse nicht; Links in Mails können falsch sein.',
+            fix="'overwrite.cli.url' => 'https://cloud.example.org',   // eigene Adresse eintragen")
+    ll = cfg.get('loglevel')
+    if ll in (0, 1, '0', '1'):
+        row('loglevel', 'warn', f'{ll} ({"Debug" if str(ll) == "0" else "Info"})', '2 (Warnung)',
+            'Sehr ausführliches Logging füllt die Platte und kostet Leistung. Nur zur Fehlersuche verwenden.', set_value='2')
+    if not cfg.get('logtimezone'):
+        row('logtimezone', 'info', 'nicht gesetzt (UTC)', 'z. B. Europe/Vienna',
+            'Zeitangaben im Nextcloud-Log sind sonst in UTC.', set_value='Europe/Vienna')
+    # Kritische Schlüssel nie zum Entfernen empfehlen (z. B. passwordsalt: nötig für alte Passwort-Hashes).
+    dep = [k for k in cfg if (opts.get(k) or {}).get('deprecated') and k not in CONFIG_CRITICAL]
+    if dep:
+        row(', '.join(dep), 'warn', 'gesetzt', 'entfernen, wenn nicht mehr benötigt',
+            'Laut config.sample.php veraltet – die Einstellung wird künftig nicht mehr unterstützt.')
+    unknown = [k for k in cfg if k not in opts]
+    if unknown and opts:
+        row(', '.join(sorted(unknown)), 'info', f'{len(unknown)} Schlüssel', 'prüfen',
+            'Nicht in der config.sample.php dieser Version beschrieben. Meist Einstellungen von Apps (unbedenklich) – '
+            'oder ein Tippfehler im Schlüssel, dann wirkt die Einstellung nicht.')
+    return rows
+
+
+def config_data():
+    data, err = call_json('config_info')
+    cfg = (data.get('config') or {}).get('system') or {}
+    sample = data.get('sample') or {}
+    opts = sample.get('options') or {}
+    status = data.get('status') or {}
+    sources = data.get('sources') or {}
+
+    def where(k):
+        x = sources.get(k) or {}
+        return f"{x['file']}:{x['line']}" if x.get('file') and x.get('line') else x.get('file', '')
+    groups = {}
+    for k in sorted(cfg, key=lambda k: ((opts.get(k) or {}).get('order', 10 ** 6), k)):
+        o = opts.get(k) or {}
+        sec = CONFIG_SECTION_DE.get(o.get('section'), o.get('section')) if o else 'Nicht in der Doku beschrieben'
+        groups.setdefault(sec, []).append(dict(
+            key=k, value=config_fmt(cfg[k]), complex=isinstance(cfg[k], (dict, list)), masked=MASKED in json.dumps(cfg[k], ensure_ascii=False),
+            default=o.get('default', ''), desc=o.get('desc', ''), short=config_short(o.get('desc', '')),
+            de=CONFIG_CRITICAL.get(k, ''), critical=k in CONFIG_CRITICAL, settable=k in CONFIG_SETTABLE,
+            documented=bool(o), deprecated=o.get('deprecated', False), src=where(k),
+            file=(sources.get(k) or {}).get('file', '')))
+    catalog = {}
+    for k, o in sorted(opts.items(), key=lambda x: x[1].get('order', 0)):
+        sec = CONFIG_SECTION_DE.get(o.get('section'), o.get('section'))
+        catalog.setdefault(sec, []).append(dict(key=k, set=k in cfg, default=o.get('default', ''),
+                                                short=config_short(o.get('desc', '')), desc=o.get('desc', ''),
+                                                example=o.get('example', '')))
+    host = cfg.get('overwrite.cli.url') or ((cfg.get('trusted_domains') or [''])[0] if isinstance(cfg.get('trusted_domains'), list) else '')
+    info = dict(version=status.get('versionstring', ''), nc_path=data.get('nc_path', ''), host=host or data.get('hostname', ''),
+                hostname=data.get('hostname', ''), datadir=cfg.get('datadirectory', ''), dbtype=cfg.get('dbtype', ''),
+                count=len(cfg), critical=sum(1 for k in cfg if k in CONFIG_CRITICAL), sample_error=sample.get('error', ''),
+                documented=len(opts))
+    files = sorted({(x or {}).get('file') for x in sources.values() if (x or {}).get('file')},
+                   key=lambda f: (not f.endswith('/config.php'), f))
+    return dict(cfg=cfg, opts=opts, groups=groups, catalog=catalog, info=info, err=err, files=files,
+                recs=config_recommendations(cfg, opts))
+
+
+@app.get('/config')
+@login_required
+def config_page():
+    d = config_data()
+    settable = [dict(key=k, current=config_fmt(d['cfg'].get(k)) if k in d['cfg'] else '', **v,
+                     default=(d['opts'].get(k) or {}).get('default', '')) for k, v in CONFIG_SETTABLE.items()]
+    return render_template('config.html', **d, settable=settable, doc=CONFIG_DOC, running=jobs.running_job_id())
+
+
+@app.get('/config/print')
+@login_required
+def config_print():
+    d = config_data()
+    crit = [r for g in d['groups'].values() for r in g if r['critical']]
+    crit.sort(key=lambda r: list(CONFIG_CRITICAL).index(r['key']))
+    other = {g: [r for r in rows if not r['critical']] for g, rows in d['groups'].items()}
+    other = {g: rows for g, rows in other.items() if rows}
+    return render_template('config_print.html', **d, crit=crit, other=other, doc=CONFIG_DOC, cfg_masked=MASKED,
+                           now=time.strftime('%d.%m.%Y %H:%M'))
+
+
+def report_php():
+    """PHP-Werte für CLI und Web mit der Datei, aus der der wirksame Wert stammt."""
+    p, _ = call_json('php_platform')
+    v, _ = call_json('php_values')
+    cli, fpm = v.get('cli') or {}, v.get('fpm') or {}
+    has_fpm, web_sapi = bool(v.get('fpm_service')), p.get('web_sapi', '')
+    ov, srcs = v.get('overrides') or {}, v.get('sources') or {}
+
+    def last(k, sapi):
+        items = [x for x in srcs.get(k) or [] if x.get('sapi') == sapi]
+        return items[-1]['file'] if items else ''
+    rows = []
+    for k in v.get('keys', []):
+        web, origin = php_web_value(k, cli.get(k) or '', fpm.get(k) or '', has_fpm, web_sapi, ov)
+        if origin == '.user.ini':
+            wfile = ov.get('user_ini_path', '.user.ini')
+        elif origin == '.htaccess':
+            wfile = ov.get('htaccess_path', '.htaccess')
+        else:
+            wfile = last(k, 'fpm' if has_fpm else 'cli')
+        rows.append(dict(key=k, label=PHP_LABELS.get(k, ''), cli=cli.get(k) or '–', cli_file=last(k, 'cli') or 'PHP-Standard',
+                         web=web or '–', web_file=wfile or 'PHP-Standard', origin=origin))
+    return dict(platform=p, rows=rows, cli_files=v.get('cli_files') or [], fpm_files=v.get('fpm_files') or [])
+
+
+def report_web():
+    data, _ = call_json('web_info')
+    web, out = data.get('web') or {}, []
+    for key, label in (('apache', 'Apache'), ('nginx', 'nginx')):
+        f = web.get(key)
+        if not f:
+            continue
+        rows = []
+        p = f.get('primary') or {}
+        if p:
+            rows.append(('Nextcloud-Bereich', p.get('name') or '(ohne Namen)', p.get('src', '')))
+        if key == 'apache':
+            for name, fk in (('AllowOverride (Nextcloud-Ordner)', 'allow_override'), ('HSTS', 'hsts'),
+                             ('LimitRequestBody', 'limit_request_body'), ('PHP-FPM-Anbindung', 'fpm_handler')):
+                x = f.get(fk)
+                if x:
+                    rows.append((name, x.get('value', ''), x.get('src', '')))
+            rows.append(('MPM · PHP', f"{f.get('mpm', '–')} · {' + '.join(f.get('php_handlers') or ['–'])}", 'apache2ctl -V / -M'))
+            rows.append(('Geladene Module', ', '.join(m.replace('_module', '') for m in f.get('modules') or []),
+                         '/etc/apache2/mods-enabled/'))
+        else:
+            for d in ('client_max_body_size', 'client_body_timeout', 'fastcgi_buffers', 'fastcgi_read_timeout',
+                      'fastcgi_request_buffering', 'fastcgi_pass', 'gzip', 'server_tokens', 'front_controller'):
+                x = f.get(d)
+                if x:
+                    rows.append((d, x.get('value', ''), x.get('src', '')))
+            for name, fk in (('/.well-known/carddav', 'carddav'), ('/.well-known/caldav', 'caldav')):
+                if (f.get('wellknown') or {}).get(fk):
+                    rows.append((name, 'Weiterleitung', f['wellknown'][fk]))
+            if f.get('hidden_paths'):
+                rows.append(('Sperre interner Ordner', 'vorhanden', f['hidden_paths']))
+            if f.get('headers'):
+                rows.append(('Sicherheits-Header', ', '.join(f['headers']), f.get('headers_src', '')))
+        out.append(dict(label=f"{label} {f.get('version', '')}", rows=rows, error=f.get('error', '')))
+    return out
+
+
+@app.get('/report')
+@login_required
+def report_page():
+    d = config_data()
+    by_file = {}
+    for rows in d['groups'].values():
+        for r in rows:
+            by_file.setdefault(r['file'] or '(Fundort unbekannt)', []).append(r)
+    for f in by_file:
+        by_file[f].sort(key=lambda r: int(r['src'].rsplit(':', 1)[1]) if r['src'][-1:].isdigit() else 0)
+    order = sorted(by_file, key=lambda f: (not f.endswith('/config.php'), f))
+    fpm, _ = call_json('fpm_info')
+    diag, _ = call_json('diagnose')
+    core = (((diag.get('core') or {}).get('apps') or {}).get('core') or {})
+    return render_template('report.html', **d, by_file=[(f, by_file[f]) for f in order], php=report_php(),
+                           fpm=fpm, web=report_web(), diag=diag, bgmode=core.get('backgroundjobs_mode', ''),
+                           crit_keys=CONFIG_CRITICAL, now=time.strftime('%d.%m.%Y %H:%M'), cfg_masked=MASKED, doc=CONFIG_DOC)
+
+
+@app.post('/config/set')
+@login_required
+def config_set():
+    key, value = request.form.get('key', ''), request.form.get('value', '').strip()
+    if key not in CONFIG_SETTABLE or not re.fullmatch(CONFIG_SETTABLE[key]['rx'], value):
+        hint = CONFIG_SETTABLE[key]['hint'] if key in CONFIG_SETTABLE else 'nicht erlaubter Schlüssel'
+        return render_template('message.html', title='Ungültiger Wert',
+                               text=f'„{value}“ ist für {key} nicht zulässig ({hint}).', bad=True), 400
+    return start('config_set', [key, value])
+
+
+@app.post('/config/reset')
+@login_required
+def config_reset():
+    key = request.form.get('key', '')
+    if key not in CONFIG_SETTABLE:
+        abort(400)
+    return start('config_reset', [key])
 
 
 # --------------------------------------------------------------------------- Nextcloud-Prüfungen

@@ -1,0 +1,126 @@
+{# Nextcloud Server Manager · Copyright (c) 2026 roswitina@hotmail.com · SPDX-License-Identifier: MIT #}
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Systembericht {{ info.host or info.hostname }} – {{ now }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='print.css') }}?v={{ VERSION }}">
+</head>
+<body class="report">
+<div class="toolbar noprint">
+  <button type="button" data-print>Drucken / als PDF speichern</button>
+  <a href="{{ url_for('home') }}">← zurück zum Dashboard</a>
+</div>
+<header>
+  <div class="kicker">Nextcloud · Systembericht</div>
+  <h1>{{ info.host or info.hostname }}</h1>
+  <table class="facts">
+    <tr><th>Nextcloud-Version</th><td>{{ info.version or '–' }}</td><th>Stand</th><td>{{ now }}</td></tr>
+    <tr><th>Programmordner</th><td class="mono">{{ info.nc_path }}</td><th>Server</th><td class="mono">{{ info.hostname }}</td></tr>
+    <tr><th>Datenverzeichnis</th><td class="mono">{{ info.datadir or '–' }}</td><th>PHP</th><td>{{ php.platform.cli_full or '–' }} · {{ php.platform.web_sapi or '–' }}</td></tr>
+  </table>
+  <p class="note">Alle wichtigen Einstellungen dieser Nextcloud und wo sie stehen – <b>Datei:Zeile</b>.
+    Passwörter, Schlüssel und Tokens sind ausgeblendet (<span class="mono">{{ cfg_masked }}</span>).
+    Sicher aufbewahren: Das Dokument enthält Adressen, Pfade und Datenbank-Namen.</p>
+  <ol class="toc">
+    <li>Nextcloud – config.php</li><li>PHP</li><li>PHP-FPM</li><li>Webserver</li><li>Hintergrundjobs, Datenbank, Redis</li><li>Wichtige Dateien</li>
+  </ol>
+</header>
+
+<section>
+  <h2>1 · Nextcloud – config.php</h2>
+  <p class="lead">Nach Datei geordnet. Nextcloud lädt zuerst config.php, danach alle *.config.php im selben Ordner;
+    ein späterer Wert überschreibt einen früheren. <span class="crit-mark">Rot</span> = kritische Einstellung.</p>
+  {% for f, rows in by_file %}
+  <h3 class="file mono">{{ f }}</h3>
+  <table class="settings">
+    <thead><tr><th class="ln">Zeile</th><th class="k">Einstellung</th><th>Wert</th><th class="d">Bedeutung</th></tr></thead>
+    <tbody>{% for r in rows %}
+      <tr><td class="ln mono">{{ r.src.rsplit(':', 1)[1] if r.src[-1:].isdigit() else '–' }}</td>
+        <td class="k mono{% if r.critical %} crit{% endif %}">{{ r.key }}</td>
+        <td>{% if r.complex %}<pre>{{ r.value }}</pre>{% else %}<span class="mono">{{ r.value }}</span>{% endif %}</td>
+        <td class="d">{{ r.de or r.short }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p>Keine Einstellungen gefunden.</p>{% endfor %}
+</section>
+
+<section>
+  <h2>2 · PHP</h2>
+  <p class="lead">„Web“ ist der Wert, den Webanfragen bekommen (PHP-FPM bzw. mod_php, inkl. .user.ini/.htaccess), „CLI“ gilt
+    für occ und Cron. Angegeben ist jeweils die Datei, aus der der wirksame Wert stammt.</p>
+  <table class="settings">
+    <thead><tr><th class="k">Einstellung</th><th>Web</th><th>Datei (Web)</th><th>CLI</th><th>Datei (CLI)</th></tr></thead>
+    <tbody>{% for r in php.rows %}
+      <tr><td class="k mono">{{ r.key }}</td><td class="mono">{{ r.web }}</td><td class="mono small">{{ r.web_file }}</td>
+        <td class="mono">{{ r.cli }}</td><td class="mono small">{{ r.cli_file }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+</section>
+
+<section>
+  <h2>3 · PHP-FPM</h2>
+  {% for ver, v in (fpm.versions or {}).items() %}{% for pool, p in v.pools.items() %}
+  <h3>PHP {{ ver }} · Pool [{{ pool }}]</h3>
+  <table class="settings">
+    <thead><tr><th class="k">Einstellung</th><th>Wert</th></tr></thead>
+    <tbody>{% for k, val in p.config.items() %}<tr><td class="k mono">{{ k }}</td><td class="mono">{{ val }}</td></tr>{% endfor %}
+      <tr><td class="k">Datei(en)</td><td class="mono small">{{ p.files|join(', ') }}</td></tr></tbody>
+  </table>
+  {% endfor %}{% else %}<p>Kein laufender PHP-FPM-Dienst (z. B. Apache mit mod_php).</p>{% endfor %}
+</section>
+
+<section>
+  <h2>4 · Webserver</h2>
+  {% for w in web %}
+  <h3>{{ w.label }}</h3>
+  {% if w.error %}<p>Konfiguration nicht lesbar: {{ w.error }}</p>{% else %}
+  <table class="settings">
+    <thead><tr><th class="k">Einstellung</th><th>Wert</th><th class="d">Datei:Zeile</th></tr></thead>
+    <tbody>{% for name, val, src in w.rows %}<tr><td class="k">{{ name }}</td><td class="mono">{{ val }}</td><td class="d mono small">{{ src }}</td></tr>{% endfor %}</tbody>
+  </table>{% endif %}
+  {% else %}<p>Weder Apache noch nginx laufen auf diesem Server.</p>{% endfor %}
+</section>
+
+<section>
+  <h2>5 · Hintergrundjobs, Datenbank, Redis</h2>
+  <table class="settings">
+    <thead><tr><th class="k">Bereich</th><th>Wert</th><th class="d">Fundort</th></tr></thead>
+    <tbody>
+      <tr><td class="k">Hintergrundjobs</td><td>{{ bgmode or '–' }}</td><td class="d small">Nextcloud-Einstellung (occ background:cron)</td></tr>
+      <tr><td class="k">Cron-Eintrag</td><td class="mono">{{ diag.cron_entry or diag.cron_timer or 'nicht gefunden' }}</td>
+        <td class="d mono small">{{ diag.cron_src or ('systemd-Timer ' ~ diag.cron_timer if diag.cron_timer else '–') }}</td></tr>
+      {% set db = diag.db or {} %}
+      <tr><td class="k">Datenbank</td><td>{{ db.type or '–' }} {{ db.version or '' }}{% if db.size_bytes %} · {{ (db.size_bytes / 1048576)|round(1) }} MB{% endif %}</td>
+        <td class="d small">config.php: dbtype, dbhost, dbname</td></tr>
+      {% set rd = diag.redis or {} %}
+      <tr><td class="k">Redis</td><td>{% if rd.configured %}{{ rd.host }}{% if rd.port %}:{{ rd.port }}{% endif %} · {{ rd.ping or rd.error or '–' }}{% if rd.version %} · {{ rd.version }}{% endif %}{% else %}nicht eingetragen{% endif %}</td>
+        <td class="d small">config.php: redis</td></tr>
+      <tr><td class="k">Caches</td><td class="mono small">lokal: {{ diag.memcache_local or '–' }} · verteilt: {{ diag.memcache_distributed or '–' }} · Sperren: {{ diag.memcache_locking or '–' }}</td>
+        <td class="d small">config.php: memcache.*</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>6 · Wichtige Dateien</h2>
+  <table class="settings">
+    <tbody>
+      {% for f in files %}<tr><td class="k">Nextcloud-Konfiguration</td><td class="mono">{{ f }}</td></tr>{% endfor %}
+      {% if php.platform.cli_ini %}<tr><td class="k">php.ini (CLI)</td><td class="mono">{{ php.platform.cli_ini }}</td></tr>{% endif %}
+      {% if php.platform.web_ini %}<tr><td class="k">php.ini (Web)</td><td class="mono">{{ php.platform.web_ini }}</td></tr>{% endif %}
+      {% for f in php.fpm_files %}{% if 'nextcloud' in f or 'manager' in f %}<tr><td class="k">PHP-Zusatzdatei (Web)</td><td class="mono">{{ f }}</td></tr>{% endif %}{% endfor %}
+      {% for ver, v in (fpm.versions or {}).items() %}{% for pool, p in v.pools.items() %}{% for f in p.files %}<tr><td class="k">FPM-Pool {{ pool }}</td><td class="mono">{{ f }}</td></tr>{% endfor %}{% endfor %}{% endfor %}
+      {% for w in web %}{% for name, val, src in w.rows if name == 'Nextcloud-Bereich' %}<tr><td class="k">{{ w.label }}: Nextcloud-Bereich</td><td class="mono">{{ src.rsplit(':', 1)[0] }}</td></tr>{% endfor %}{% endfor %}
+      <tr><td class="k">Nextcloud-Log</td><td class="mono">{{ cfg.logfile or (info.datadir ~ '/nextcloud.log') }}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<footer>Erstellt mit Nextcloud Server Manager {{ VERSION }} am {{ now }} · Beschreibungen: config.sample.php der installierten
+  Nextcloud-Version · Doku: {{ doc[1] }}</footer>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ VERSION }}" defer></script>
+</body>
+</html>
