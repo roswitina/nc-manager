@@ -203,7 +203,9 @@ check_datadir() {
   [ -d "$d" ] && [ ! -L "$d" ] || { echo "Datenverzeichnis $d fehlt oder ist ein symbolischer Link."; return 1; }
   owner=$(stat -c %U -- "$d" 2>/dev/null)
   [ "$owner" = "$NCM_WEBUSER" ] || { echo "Datenverzeichnis $d gehört $owner, nicht $NCM_WEBUSER."; return 1; }
-  [ -e "$d/.ocdata" ] || { echo "In $d fehlt die Nextcloud-Markierung .ocdata – kein Nextcloud-Datenverzeichnis?"; return 1; }
+  # Markierung des Datenverzeichnisses: .ncdata (aktuelle Nextcloud-Versionen) oder .ocdata (ältere Versionen).
+  [ -e "$d/.ncdata" ] || [ -e "$d/.ocdata" ] || {
+    echo "In $d fehlt die Nextcloud-Markierung (.ncdata bzw. bei älteren Versionen .ocdata) – kein Nextcloud-Datenverzeichnis?"; return 1; }
   case "$NCM_NC_PATH/" in "$d"/*) echo "Der Programmordner liegt im Datenverzeichnis $d – abgelehnt."; return 1;; esac
   case "$BACKUP_DIR/" in "$d"/*) echo "Das Backup-Verzeichnis liegt im Datenverzeichnis $d – abgelehnt."; return 1;; esac
   return 0
@@ -270,7 +272,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.7.0"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.7.1"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"

@@ -80,7 +80,7 @@ def make_sim(dbtype='sqlite3'):
         'false' if v is False else ("array('host'=>'localhost','port'=>6379,'password'=>'REDIS-GEHEIM')" if k == 'redis'
                                     else "'" + str(v).replace("'", "\\'") + "'")) for k, v in cfg.items()) + ')'
     open(os.path.join(nc, 'config', 'config.php'), 'w').write(f'<?php\n$CONFIG = {php_cfg};\n')
-    open(os.path.join(data, '.ocdata'), 'w').close()
+    open(os.path.join(data, '.ncdata'), 'w').write('# Nextcloud data directory\n')     # aktuelle Nextcloud-Versionen
     for i in range(20):
         open(os.path.join(data, 'admin', 'files', f'f{i}'), 'wb').write(os.urandom(2000))
     with open(os.path.join(nc, '.user.ini'), 'w') as f:
@@ -431,10 +431,11 @@ def test_datadir_checks_even_if_env_matches(sim):
     r = run(sim, 'backup')
     assert r.returncode == 38 and 'install.sh erneut' in r.stdout
     env_datadir(sim['data'])
-    os.unlink(os.path.join(sim['data'], '.ocdata'))         # kein Nextcloud-Datenverzeichnis
+    os.unlink(os.path.join(sim['data'], '.ncdata'))         # kein Nextcloud-Datenverzeichnis
     r = run(sim, 'backup')
-    assert r.returncode == 38 and '.ocdata' in r.stdout
-    open(os.path.join(sim['data'], '.ocdata'), 'w').close()
+    assert r.returncode == 38 and '.ncdata' in r.stdout
+    open(os.path.join(sim['data'], '.ocdata'), 'w').close()  # ältere Versionen: .ocdata genügt (0.7.1)
+    assert run(sim, 'backup').returncode == 0
     os.chown(sim['data'], 0, 0)                             # gehört nicht dem Webserver-Benutzer
     r = run(sim, 'backup')
     assert r.returncode == 38 and 'gehört root' in r.stdout

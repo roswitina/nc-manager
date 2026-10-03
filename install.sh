@@ -5,7 +5,7 @@
 # Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # Installer / Upgrade für den Nextcloud Server Manager.
 set -euo pipefail
-VERSION=0.7.0
+VERSION=0.7.1
 SRC="$(cd "$(dirname "$0")" && pwd)"
 [ "$EUID" -eq 0 ] || { echo 'Bitte als root/sudo starten.'; exit 1; }
 echo "=== Nextcloud Server Manager $VERSION Installer ==="
@@ -106,7 +106,7 @@ fi
 [ -n "$DATADIR" ] || read -rp 'Nextcloud-Datenverzeichnis (datadirectory): ' DATADIR
 DATADIR=${DATADIR%/}
 [[ "$DATADIR" =~ ^/[A-Za-z0-9._/@+-]+$ ]] && [[ ! "$DATADIR/" =~ /\.\.?/ ]] || { echo "Ungültiges Datenverzeichnis: $DATADIR"; exit 1; }
-[ -d "$DATADIR" ] && [ -e "$DATADIR/.ocdata" ] || echo "WARNUNG: $DATADIR fehlt oder enthält keine .ocdata – Backups und Wiederherstellung werden abgelehnt, bis das stimmt."
+[ -d "$DATADIR" ] && { [ -e "$DATADIR/.ncdata" ] || [ -e "$DATADIR/.ocdata" ]; } || echo "WARNUNG: $DATADIR fehlt oder enthält keine Nextcloud-Markierung (.ncdata bzw. .ocdata) – Backups und Wiederherstellung werden abgelehnt, bis das stimmt."
 echo "✓ Datenverzeichnis: $DATADIR"
 
 HASH=''; PASS=''

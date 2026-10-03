@@ -20,7 +20,7 @@ from werkzeug.security import check_password_hash
 
 import jobs
 
-VERSION = '0.7.0'
+VERSION = '0.7.1'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

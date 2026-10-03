@@ -1,8 +1,8 @@
-# Nextcloud Server Manager – Programmdokumentation (Version 0.7.0)
+# Nextcloud Server Manager – Programmdokumentation (Version 0.7.1)
 
 Stand: 2. Oktober 2026 · Die PDF-Fassung liegt jedem Release bei.
 
-Der Nextcloud Server Manager (Version 0.7.0) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
+Der Nextcloud Server Manager (Version 0.7.1) ist eine Weboberfläche, mit der man eine selbst betriebene Nextcloud auf Debian, Ubuntu oder DietPi überwacht, wartet, sichert und aktualisiert – alle Aktionen an einer Stelle und mit Protokoll.
 
 > **Urheber:** roswitina@hotmail.com · **Lizenz:** MIT · Unentgeltlich und ohne jede Gewährleistung bereitgestellt; die Nutzung erfolgt auf eigenes Risiko. Einzelheiten im Abschnitt „Lizenz und Haftungsausschluss“.
 
@@ -104,12 +104,12 @@ Zugriff aufs Internet braucht der Server nur für die Paketinstallation, die Upd
 
 Die Installation dauert etwa zwei bis fünf Minuten und läuft komplett über das Skript install.sh, das als root gestartet wird.
 
-1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.7.0.tar.gz user@server:`
+1. Archiv auf den Server kopieren, z. B. mit `scp nc-manager-v0.7.1.tar.gz user@server:`
 2. Entpacken und ins Verzeichnis wechseln:
 
    ```bash
-   tar xzf nc-manager-v0.7.0.tar.gz
-   cd nc-manager-v0.7.0
+   tar xzf nc-manager-v0.7.1.tar.gz
+   cd nc-manager-v0.7.1
    ```
 3. Installer starten: `sudo ./install.sh`
 4. Die Fragen beantworten (Tabelle unten). Mit Enter wird jeweils die Vorgabe in eckigen Klammern übernommen.
@@ -153,6 +153,8 @@ Ein Upgrade ist dieselbe Prozedur wie die Installation: neues Archiv entpacken u
 - **Ersetzt** werden app.py, jobs.py, templates/, static/, Wrapper und Helfer. Die venv bleibt erhalten, Pakete werden nur aktualisiert.
 - **Protokoll:** Beim ersten Start migriert die App die alte Tabelle aus v0.4.3 automatisch. Reine Lese-Aufrufe wie Dashboard-Abfragen werden dabei verworfen, echte Aktionen bleiben erhalten.
 - **Laufende Aktion:** Der Dienst wird während des Upgrades gestoppt. Ein laufender Hintergrund-Job (z. B. ein Nextcloud-Update) läuft dank KillMode=process trotzdem zu Ende. Besser ist es aber, das Upgrade erst danach zu starten.
+
+**Von 0.7.0 auf 0.7.1:** Keine Besonderheiten. Behebt den Abbruch von Backup und Wiederherstellung (Exit-Code 38) bei Datenverzeichnissen mit `.ncdata`.
 
 **Von 0.6.5 auf 0.7.0:** Keine Besonderheiten, einfach install.sh ausführen. Die neue Seite „Webserver“ steht danach sofort zur Verfügung.
 
@@ -722,7 +724,7 @@ Der Manager legt Dateien an genau diesen Stellen an; außerhalb davon verändert
 | /opt/nc-manager/LICENSE.md, HAFTUNGSAUSSCHLUSS.md | ncmanager | Lizenztext und Haftungsausschluss, angezeigt auf der Seite /lizenz |
 | \<Backup-Verzeichnis>/logs/ | root, 700/600 | Archivierte Nextcloud-Logs (nextcloud.log.\<JJJJMMTT-HHMMSS>.gz) |
 
-Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), requirements-dev.txt (zusätzlich pytest, nur für Tests), templates/ (19 Vorlagen), static/ (style.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE und LICENSE.md (gleicher Inhalt; das Programm verwendet LICENSE), HAFTUNGSAUSSCHLUSS.md, docs/DOKUMENTATION.md (diese Dokumentation als Markdown) und docs/Nextcloud-Server-Manager-Doku-v.0.7.0.pdf (als PDF).
+Die Programmdateien im Archiv: app.py, jobs.py, ncm\_helper.py, nc-manager-cmd, install.sh, uninstall.sh, requirements.txt (Flask 3, Werkzeug 3, Gunicorn 22/23), requirements-dev.txt (zusätzlich pytest, nur für Tests), templates/ (19 Vorlagen), static/ (style.css, app.js), tests/ sowie README.md, CHANGELOG.md, LICENSE und LICENSE.md (gleicher Inhalt; das Programm verwendet LICENSE), HAFTUNGSAUSSCHLUSS.md, docs/DOKUMENTATION.md (diese Dokumentation als Markdown) und docs/Nextcloud-Server-Manager-Doku-v.0.7.1.pdf (als PDF).
 
 ## Sicherheitskonzept
 
@@ -745,7 +747,7 @@ Hooks laufen ebenfalls als root. Deshalb führt der Wrapper sie nur aus, wenn Da
   1. datadirectory in config.php genau diesem Wert entspricht,
   2. es ein absoluter Pfad ohne `.`, `..` oder `//` ist und kein Systemverzeichnis (z. B. /, /etc, /usr, /root, /boot, /var),
   3. es existiert und kein symbolischer Link ist,
-  4. es dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält,
+  4. es dem Webserver-Benutzer gehört und die Nextcloud-Markierung enthält – `.ncdata` (aktuelle Nextcloud-Versionen) oder `.ocdata` (ältere Versionen),
   5. weder der Programmordner noch das Backup-Verzeichnis darin liegen.
 
   Sonst bricht die Aktion ab, bevor etwas verändert wird (Exit-Code 38 beim Backup, 67 bei der Wiederherstellung); die Seite „Wiederherstellen“ nennt den Grund. Auch für SQLite verwendet der Helfer das festgehaltene Verzeichnis, nicht das aus config.php.
@@ -813,7 +815,7 @@ Die erste Anlaufstelle ist immer die Ausgabe des Jobs (Protokoll) bzw. das Journ
 | Prüfung: „Dump ist unvollständig“ | Dump wurde abgebrochen oder abgeschnitten (z. B. Platte voll) | Neues Backup erstellen, freien Platz prüfen |
 | Backup/Wiederherstellung: „Datenverzeichnis in config.php … weicht … ab“ | Datenverzeichnis wurde verschoben – oder config.php wurde manipuliert | Selbst verschoben: `sudo ./install.sh` erneut ausführen und den neuen Pfad bestätigen. Sonst config.php prüfen und den Server auf einen Einbruch untersuchen |
 | Backup/Wiederherstellung: „NCM\_DATADIR fehlt“ | Upgrade auf 0.6.4 ohne erneuten Lauf von install.sh | `sudo ./install.sh` ausführen |
-| Backup/Wiederherstellung: „.ocdata fehlt“ oder „gehört … nicht“ | Falscher Pfad festgehalten oder Rechte im Datenverzeichnis falsch | Pfad in /etc/nc-manager.env prüfen; `ls -la <Datenverzeichnis>`, Besitzer muss der Webserver-Benutzer sein |
+| Backup/Wiederherstellung: „fehlt die Nextcloud-Markierung“ oder „gehört … nicht“ | Falscher Pfad festgehalten oder Rechte im Datenverzeichnis falsch | Pfad in /etc/nc-manager.env prüfen; `ls -la <Datenverzeichnis>`, Besitzer muss der Webserver-Benutzer sein |
 | Backup: „… enthält Steuerzeichen“ oder „darf nicht mit "-" beginnen“ | Ungewöhnliche oder manipulierte Datenbank-Angaben in config.php | config.php prüfen; Passwörter mit Zeilenumbruch sind nicht zulässig |
 | Wiederherstellung verweigert: Mountpoint | Datenverzeichnis ist ein eigenes Laufwerk | Benutzerdaten von Hand zurückspielen (WIEDERHERSTELLEN.txt) |
 | Nach Wiederherstellung im Wartungsmodus | Ein Schritt ist gescheitert; der Assistent lässt den Wartungsmodus bewusst an | Job-Ausgabe lesen; Sicherheits-Backup und .ncm-before-restore-Ordner liegen bereit |
@@ -944,6 +946,7 @@ Diese Python-Pakete lädt der Installer aus PyPI; sie sind nicht Teil des Archiv
 
 | Version | Wichtigste Änderungen |
 | --- | --- |
+| 0.7.1 | Fehlerbehebung: Backup und Wiederherstellung akzeptieren die Markierung `.ncdata` aktueller Nextcloud-Versionen (bisher nur `.ocdata`, Abbruch mit Exit-Code 38) |
 | 0.7.0 | Neue Seite „Webserver“: Apache- und nginx-Einstellungen für Nextcloud prüfen, mit Empfehlung, Grundlage, Doku-Link und Vorschlägen zum Kopieren; Apache-Module einschalten und Webserver nach Konfigurationstest neu laden |
 | 0.6.5 | „Versionen/Papierkorb: abgelaufene löschen“ meldet bei Aufbewahrung „auto“ keinen Fehler mehr; Erklärtext zur BigInt-Konvertierung auf der Wartungsseite; requirements-dev.txt |
 | 0.6.4 | Sicherheit: Werte aus config.php gelten als nicht vertrauenswürdig. Das Datenverzeichnis wird bei der Installation festgehalten und vor Backup und Wiederherstellung geprüft; Datenbank-Angaben werden auf Steuerzeichen und eingeschleuste Optionen geprüft; Wiederherstellungsseite zeigt den Grund einer Ablehnung |

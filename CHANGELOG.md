@@ -2,6 +2,15 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.7.1
+
+- **Fehlerbehebung: Backup und Wiederherstellung brachen bei aktuellen Nextcloud-Versionen mit Exit-Code 38 ab**
+  („In … fehlt die Nextcloud-Markierung .ocdata“). Aktuelle Nextcloud-Versionen kennzeichnen das Datenverzeichnis mit
+  `.ncdata`, ältere mit `.ocdata`; die Prüfung aus 0.6.4 kannte nur die alte Datei. Jetzt genügt eine der beiden.
+  Betroffen waren alle Installationen, deren Datenverzeichnis nur `.ncdata` enthält.
+- Die simulierte Nextcloud der Tests verwendet jetzt `.ncdata` wie eine aktuelle Installation; ein Test prüft
+  zusätzlich, dass `.ocdata` weiter akzeptiert wird.
+
 ## 0.7.0
 
 - **Neue Seite „Webserver“** für Apache und nginx. Sie erkennt den Webserver, den VirtualHost bzw. server-Block der
@@ -44,7 +53,7 @@ kann sie ändern. Werte daraus werden jetzt nicht mehr ungeprüft verwendet, wen
 - **Datenverzeichnis:** Der Installer liest `datadirectory` aus und hält es in `/etc/nc-manager.env` fest
   (`NCM_DATADIR`, nur für root lesbar). Backup und Wiederherstellung verwenden das Datenverzeichnis nur, wenn
   config.php damit übereinstimmt, der Ordner existiert, kein symbolischer Link und kein Systemverzeichnis ist,
-  dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält. Sonst bricht die Aktion ab,
+  dem Webserver-Benutzer gehört und die Nextcloud-Markierung (`.ncdata`, bei älteren Versionen `.ocdata`, seit 0.7.1 beide) enthält. Sonst bricht die Aktion ab,
   ohne etwas zu verändern (Exit-Code 38 bei Backups, 67 bei der Wiederherstellung). Vorher hätte ein
   manipulierter Pfad (z. B. `/etc`) bei einer Wiederherstellung mit Benutzerdaten von root verschoben und
   per `chown -R` dem Webserver-Benutzer übereignet werden können.

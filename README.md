@@ -1,4 +1,4 @@
-# Nextcloud Server Manager v0.7.0
+# Nextcloud Server Manager v0.7.1
 
 Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
 
@@ -15,7 +15,7 @@ und Wiederherstellung, Diagnose, Logs, Wartungsbefehle und Update-Assistent.
 ## Installation / Upgrade
 
 ```bash
-tar xzf nc-manager-v0.7.0.tar.gz && cd nc-manager-v0.7.0
+tar xzf nc-manager-v0.7.1.tar.gz && cd nc-manager-v0.7.1
 sudo ./install.sh
 ```
 
@@ -40,6 +40,15 @@ Empfohlen ist **„nur localhost“**. Dann gibt es zwei Wege:
   ```
 
 Die Option „LAN“ funktioniert weiterhin, überträgt Passwort und Sitzung aber unverschlüsselt.
+
+## Änderungen in 0.7.1
+
+- **Fehlerbehebung: Backup und Wiederherstellung brachen bei aktuellen Nextcloud-Versionen mit Exit-Code 38 ab**
+  („In … fehlt die Nextcloud-Markierung .ocdata“). Aktuelle Nextcloud-Versionen kennzeichnen das Datenverzeichnis mit
+  `.ncdata`, ältere mit `.ocdata`; die Prüfung aus 0.6.4 kannte nur die alte Datei. Jetzt genügt eine der beiden.
+  Betroffen waren alle Installationen, deren Datenverzeichnis nur `.ncdata` enthält.
+- Die simulierte Nextcloud der Tests verwendet jetzt `.ncdata` wie eine aktuelle Installation; ein Test prüft
+  zusätzlich, dass `.ocdata` weiter akzeptiert wird.
 
 ## Änderungen in 0.7.0
 
@@ -83,7 +92,7 @@ kann sie ändern. Werte daraus werden jetzt nicht mehr ungeprüft verwendet, wen
 - **Datenverzeichnis:** Der Installer liest `datadirectory` aus und hält es in `/etc/nc-manager.env` fest
   (`NCM_DATADIR`, nur für root lesbar). Backup und Wiederherstellung verwenden das Datenverzeichnis nur, wenn
   config.php damit übereinstimmt, der Ordner existiert, kein symbolischer Link und kein Systemverzeichnis ist,
-  dem Webserver-Benutzer gehört und die Nextcloud-Markierung `.ocdata` enthält. Sonst bricht die Aktion ab,
+  dem Webserver-Benutzer gehört und die Nextcloud-Markierung (`.ncdata`, bei älteren Versionen `.ocdata`, seit 0.7.1 beide) enthält. Sonst bricht die Aktion ab,
   ohne etwas zu verändern (Exit-Code 38 bei Backups, 67 bei der Wiederherstellung). Vorher hätte ein
   manipulierter Pfad (z. B. `/etc`) bei einer Wiederherstellung mit Benutzerdaten von root verschoben und
   per `chown -R` dem Webserver-Benutzer übereignet werden können.
