@@ -4,23 +4,30 @@
 # SPDX-License-Identifier: MIT
 # Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 """Nextcloud Server Manager – Web-Oberfläche."""
+import hashlib
+import ipaddress
 import json
 import os
 import re
 import secrets
+import socket
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import closing
 from datetime import timedelta
 from functools import wraps
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
 import jobs
+import proxyhelp
 
-VERSION = '0.8.0'
+VERSION = '0.9.2'
 AUTHOR = 'roswitina@hotmail.com'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -48,6 +55,12 @@ MAINT_ACTIONS = {
     'files_scan': ('Alle Dateien neu einlesen', 'warn',
                    'files:scan --all liest die Dateien aller Benutzer neu ein und kann lange dauern. Fortfahren?',
                    'Dateien & Aufräumen'),
+    'tree_check': ('Datei-Struktur prüfen', '', None, 'Dateien & Aufräumen'),
+    'tree_repair': ('Datei-Struktur reparieren', 'warn',
+                    'Repariert fehlerhafte Einträge im Datei-Verzeichnis (files:repair-tree) und liest danach die '
+                    'Team-Ordner neu ein. Die Dateien selbst werden nicht verändert, aber Datenbank-Einträge gelöscht '
+                    'bzw. korrigiert. Vorher ein Backup oder einen Snapshot erstellen. Fortfahren?', 'Dateien & Aufräumen'),
+    'groupfolders_scan': ('Team-Ordner neu einlesen', '', None, 'Dateien & Aufräumen'),
     'files_cleanup': ('Verwaiste Datei-Einträge entfernen', '', None, 'Dateien & Aufräumen'),
     'trashbin_expire': ('Papierkorb: abgelaufene löschen', '', None, 'Dateien & Aufräumen'),
     'versions_expire': ('Versionen: abgelaufene löschen', '', None, 'Dateien & Aufräumen'),
@@ -95,9 +108,10 @@ ACTION_PAGES = {'php_set': 'php_page', 'fpm_set': 'fpm_page', 'app_update': 'app
                 'web_enmod': 'webserver_page', 'web_reload': 'webserver_page',
                 'config_set': 'config_page', 'config_reset': 'config_page'}
 # Diese Jobs ändern nichts am Zustand, den Setup-Checks/App-Liste beschreiben.
-CACHE_NEUTRAL = {'backup', 'backup_full', 'backup_verify', 'backup_delete', 'update_check', 'log_archive'}
+CACHE_NEUTRAL = {'backup', 'backup_full', 'backup_verify', 'backup_delete', 'update_check', 'log_archive',
+                 'tree_check'}
 # Kurzzeit-Cache für häufige, langsame Abfragen (Datei-Cache, gilt für alle Gunicorn-Worker).
-CALL_CACHE_TTL = {'dashboard': 15, 'php_platform': 60, 'fpm_info': 15}
+CALL_CACHE_TTL = {'dashboard': 15, 'php_platform': 60, 'fpm_info': 15, 'net_info': 300}
 APP_RE = r'[a-z0-9_]{1,64}'
 BACKUP_NAME_RE = r'[0-9]{8}-[0-9]{6}'
 
@@ -1094,6 +1108,82 @@ def report_web():
     return out
 
 
+def share_replacements(cfg, net, web_raw):
+    """Liste (Muster, Platzhalter) für die Fassung zum Weitergeben: Domains, Hostnamen, IPs, Mail, Instanz-ID."""
+    items = []          # (Text, Platzhalter, ist_ip)
+
+    def add(v, label):
+        v = str(v or '').strip().strip('[]')
+        if not v or v.lower() in ('localhost', '127.0.0.1', '::1', '0.0.0.0', 'true', 'false') or v.startswith('/'):
+            return
+        host = v.rsplit(':', 1)[0] if (v.count(':') == 1 and not _is_ip(v)) else v      # name:port → name
+        if len(host) < 3:
+            return
+        items.append((host, label, _is_ip(host)))
+
+    def as_list(x):
+        return list(x.values()) if isinstance(x, dict) else x if isinstance(x, list) else [x]
+    add(net.get('public'), '‹öffentliche IP›')
+    add(net.get('lan'), '‹LAN-IP›')
+    add(net.get('gateway'), '‹Gateway›')
+    for a in net.get('dns') or []:
+        add(a, '‹Domain-IP›')
+    for a in net.get('addrs') or []:
+        add(a.get('ip'), '‹IP›')
+    names = [net.get('host')] + [urlparse(cfg.get(k) or '').hostname for k in ('overwrite.cli.url',)] + \
+        [cfg.get('overwritehost')] + as_list(cfg.get('trusted_domains') or []) + as_list(cfg.get('trusted_proxies') or [])
+    for f in (web_raw or {}).values():
+        if isinstance(f, dict):
+            names += str((f.get('primary') or {}).get('name') or '').split()
+            names += [v.get('name') for v in (f.get('vhosts') or f.get('servers') or []) if v.get('name')]
+    doms = []
+    for n in names:
+        n = str(n or '').strip()
+        if n.lower().split(':')[0] in ('localhost', '127.0.0.1', '::1', ''):
+            continue
+        if n and not _is_ip(n.rsplit(':', 1)[0] if n.count(':') == 1 else n):
+            n = n.rsplit(':', 1)[0] if n.count(':') == 1 else n
+            if n.lower() not in [d.lower() for d in doms]:
+                doms.append(n)
+        else:
+            add(n, '‹IP›')
+    for i, d in enumerate(doms, 1):
+        add(d, '‹Domain›' if len(doms) == 1 else f'‹Domain {i}›')
+    add(net.get('hostname'), '‹Server›')
+    add(net.get('hostname_short'), '‹Server›')
+    for k in ('mail_smtphost', 'mail_domain', 'dbhost'):
+        add(cfg.get(k), f'‹{k}›')
+    redis = cfg.get('redis') if isinstance(cfg.get('redis'), dict) else {}
+    add(redis.get('host'), '‹redis-host›')
+    add(cfg.get('instanceid'), '‹Instanz-ID›')
+    seen, out = set(), []
+    for text, label, ip in sorted(items, key=lambda x: -len(x[0])):
+        if text.lower() in seen:
+            continue
+        seen.add(text.lower())
+        esc = re.escape(text)
+        rx = rf'(?<![\w.:]){esc}(?![\w:]|\.\d)' if ip else rf'(?<![\w.-]){esc}(?![\w-]|\.\w)'
+        out.append((re.compile(rx, 0 if ip else re.I), label))
+    return out
+
+
+def anonymize(html, repl):
+    """Ersetzt die Angaben im fertigen HTML; nur im Text, nicht in Tags (Links auf CSS/JS bleiben intakt)."""
+    parts = re.split(r'(<[^>]+>)', html)
+    for i, part in enumerate(parts):
+        if part.startswith('<'):
+            if part.startswith('<a '):          # Linkziele (z. B. die eigene Domain) ebenfalls ersetzen
+                for rx, label in repl:
+                    part = rx.sub(label, part)
+                parts[i] = part
+            continue
+        for rx, label in repl:
+            part = rx.sub(label, part)
+        part = re.sub(r'[\w.+-]+@[\w-]+(\.[\w-]+)+', '‹E-Mail›', part)
+        parts[i] = part
+    return ''.join(parts)
+
+
 @app.get('/report')
 @login_required
 def report_page():
@@ -1108,9 +1198,16 @@ def report_page():
     fpm, _ = call_json('fpm_info')
     diag, _ = call_json('diagnose')
     core = (((diag.get('core') or {}).get('apps') or {}).get('core') or {})
-    return render_template('report.html', **d, by_file=[(f, by_file[f]) for f in order], php=report_php(),
-                           fpm=fpm, web=report_web(), diag=diag, bgmode=core.get('backgroundjobs_mode', ''),
-                           crit_keys=CONFIG_CRITICAL, now=time.strftime('%d.%m.%Y %H:%M'), cfg_masked=MASKED, doc=CONFIG_DOC)
+    share = request.args.get('share') == '1'
+    net = net_data()
+    web_raw, _ = call_json('web_info')
+    html = render_template('report.html', **d, by_file=[(f, by_file[f]) for f in order], php=report_php(),
+                           fpm=fpm, web=report_web(), diag=diag, bgmode=core.get('backgroundjobs_mode', ''), net=net,
+                           share=share, crit_keys=CONFIG_CRITICAL, now=time.strftime('%d.%m.%Y %H:%M'),
+                           cfg_masked=MASKED, doc=CONFIG_DOC)
+    if share:
+        html = anonymize(html, share_replacements(d['cfg'], net, (web_raw or {}).get('web')))
+    return html
 
 
 @app.post('/config/set')
@@ -1131,6 +1228,168 @@ def config_reset():
     if key not in CONFIG_SETTABLE:
         abort(400)
     return start('config_reset', [key])
+
+
+# --------------------------------------------------------------------------- Netzwerk (Kopfzeile, Systembericht)
+
+PUBLIC_IP_SERVICES = ('https://api.ipify.org', 'https://ipv4.icanhazip.com')   # nur auf Knopfdruck
+NET_TTL = 300
+
+
+def _is_ip(s):
+    try:
+        ipaddress.ip_address(str(s).strip('[]'))
+        return True
+    except ValueError:
+        return False
+
+
+LAN_NETS = [ipaddress.ip_network(n) for n in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10',
+                                               '127.0.0.0/8', '169.254.0.0/16', 'fc00::/7', 'fe80::/10', '::1/128')]
+
+
+def is_lan(ip):
+    """Adresse aus einem Heim-/Firmennetz (RFC 1918, Carrier-NAT, ULA, Link-Local, Loopback)."""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a.version == n.version and a in n for n in LAN_NETS)
+
+
+def resolve_host(host, timeout=3):
+    """IP-Adressen eines Namens (DNS bzw. /etc/hosts), mit Zeitlimit; Ergebnis 5 Minuten im Cache."""
+    if not host or _is_ip(host):
+        return [host.strip('[]')] if host else []
+    key = 'dns-' + hashlib.sha256(host.encode('utf-8', 'replace')).hexdigest()[:24]   # Name stammt aus config.php
+    cached, ts = jobs.cache_get(key)
+    if cached is not None and time.time() - ts < NET_TTL:
+        return cached
+    pool = ThreadPoolExecutor(max_workers=1)
+    fut = pool.submit(socket.getaddrinfo, host, None)
+    try:
+        res = sorted({x[4][0] for x in fut.result(timeout=timeout)}, key=lambda a: (':' in a, a))
+    except (OSError, FutureTimeout, UnicodeError):
+        res = []
+    finally:
+        pool.shutdown(wait=False)
+    jobs.cache_set(key, res)
+    return res
+
+
+def nc_url_host(nc):
+    """Adresse der Nextcloud: overwrite.cli.url, sonst der erste sinnvolle Eintrag in trusted_domains."""
+    url = (nc or {}).get('overwrite.cli.url') or ''
+    if not url:
+        td = (nc or {}).get('trusted_domains') or []
+        td = list(td.values()) if isinstance(td, dict) else td if isinstance(td, list) else []
+        names = [d for d in td if d and d not in ('localhost', '127.0.0.1', '::1')]
+        names.sort(key=lambda d: (_is_ip(d.split(':')[0]), d))      # Namen vor IP-Adressen
+        url = f'https://{names[0]}' if names else ''
+    host = urlparse(url).hostname if url else ''
+    return url, host or ''
+
+
+def net_data():
+    data, err = call_cached_json('net_info')
+    route = (data.get('route') or [{}])[0] if data else {}
+    addrs = []
+    for itf in (data.get('addrs') or []) if data else []:
+        for a in itf.get('addr_info') or []:
+            if a.get('local'):
+                addrs.append(dict(ip=a['local'], dev=itf.get('ifname', ''), family=a.get('family', '')))
+    url, host = nc_url_host((data or {}).get('nc'))
+    dns = resolve_host(host) if host else []
+    pub = jobs.cache_get('public-ip')[0] or {}
+    lan = route.get('prefsrc', '')
+    info = dict(url=url, host=host, lan=lan, gateway=route.get('gateway', ''), dev=route.get('dev', ''), addrs=addrs,
+                dns=dns, dns_private=bool(dns) and all(is_lan(a) for a in dns),
+                public=pub.get('ip', ''), public_service=pub.get('service', ''), public_ts=pub.get('ts', 0),
+                hostname=(data or {}).get('hostname', ''), hostname_short=(data or {}).get('hostname_short', ''),
+                error=err if not data else '')
+    info['mismatch'] = bool(info['public'] and dns and not info['dns_private'] and info['public'] not in dns)
+    return info
+
+
+@app.context_processor
+def inject_net():
+    """Netzwerkdaten für die Kopfzeile – nur für angemeldete Benutzer und nur auf normalen Seiten."""
+    if session.get('auth') is not True or request.endpoint in ('login', 'static', None):
+        return {}
+    try:
+        return {'net': net_data()}
+    except Exception:          # Kopfzeile darf nie eine Seite verhindern
+        return {'net': None}
+
+
+@app.post('/net/public-ip')
+@login_required
+def net_public_ip():
+    """Fragt die öffentliche IP des Anschlusses bei einem externen Dienst ab – nur auf ausdrücklichen Knopfdruck."""
+    last_err = ''
+    for svc in PUBLIC_IP_SERVICES:
+        try:
+            with urlopen(Request(svc, headers={'User-Agent': 'nc-manager'}), timeout=6) as r:
+                ip = r.read(64).decode('ascii', 'replace').strip()
+            if _is_ip(ip):
+                jobs.cache_set('public-ip', {'ip': ip, 'service': urlparse(svc).hostname, 'ts': time.time()})
+                break
+            last_err = f'{svc}: unerwartete Antwort'
+        except (OSError, ValueError) as e:
+            last_err = f'{urlparse(svc).hostname}: {e}'
+    else:
+        return render_template('message.html', title='Öffentliche IP nicht ermittelbar',
+                               text=f'Keiner der Dienste war erreichbar ({last_err}). Hat der Server Internetzugang?',
+                               bad=True), 502
+    nxt = request.form.get('next', '')
+    return redirect(nxt if nxt.startswith('/') and not nxt.startswith('//') else url_for('home'))
+
+
+# --------------------------------------------------------------------------- Reverse-Proxy-Assistent
+
+def occ_prefix():
+    if os.environ.get('NCM_BACKEND') == 'ncc':
+        return 'ncc'
+    return f"sudo -u {os.environ.get('NCM_WEBUSER', 'www-data')} php {os.environ.get('NCM_NC_PATH', '/var/www/nextcloud')}/occ"
+
+
+@app.get('/proxy')
+@login_required
+def proxy_page():
+    data, err = call_json('config_info')
+    cfg = (data.get('config') or {}).get('system') or {}
+    a = request.args
+    if 'public_url' in a:
+        form = dict(public_url=a.get('public_url', ''), internal_url=a.get('internal_url', ''), proxy_ip=a.get('proxy_ip', ''),
+                    kind=a.get('kind', 'npm'), root_alias=a.get('root_alias') == '1')
+    else:
+        # Vorbelegung aus der Installation: Adresse, LAN-IP, Pfad (z. B. DietPi: /nextcloud), bekannter Proxy
+        net = net_data()
+        web, _ = call_json('web_info')
+        web = (web or {}).get('web') or {}
+        path = ''
+        ap = web.get('apache') or {}
+        if ap.get('mode') == 'alias':
+            path = (ap.get('url_path') or '').rstrip('/')
+        elif cfg.get('overwritewebroot'):
+            path = str(cfg.get('overwritewebroot')).rstrip('/')
+        tp = cfg.get('trusted_proxies') or []
+        tp = list(tp.values()) if isinstance(tp, dict) else tp
+        pub = cfg.get('overwrite.cli.url') or (f"https://{net['host']}" if net.get('host') else '')
+        host = urlparse(pub).hostname if pub else ''
+        form = dict(public_url=f'https://{host}' if host and not _is_ip(host) else '',
+                    internal_url=f"http://{net.get('lan') or '192.168.1.55'}{path}", proxy_ip=str(tp[0]) if tp else '',
+                    kind='npm', root_alias=bool(path))
+    result, errors, test = None, [], None
+    if 'public_url' in a:
+        vals, errors = proxyhelp.parse_inputs(form['public_url'], form['internal_url'], form['proxy_ip'], form['kind'],
+                                              form['root_alias'])
+        if vals:
+            result = proxyhelp.plan(vals, cfg)
+            if a.get('test') == '1':
+                test = proxyhelp.run_tests(result['public_base'], result['pub_hostport'], result['path'], vals['root_alias'])
+    return render_template('proxy.html', form=form, result=result, errors=errors, test=test, err=err,
+                           proxies=proxyhelp.PROXIES, occ=occ_prefix(), running=jobs.running_job_id())
 
 
 # --------------------------------------------------------------------------- Nextcloud-Prüfungen

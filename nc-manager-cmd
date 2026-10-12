@@ -62,6 +62,75 @@ run_expire() {
   return "$rc"
 }
 
+# files:repair-tree: Nextcloud 35 nennt die Probelauf-Option --dryRun, ältere Versionen --dry-run.
+# Gibt den passenden Namen aus; Exit 1, wenn es den Befehl nicht gibt (Nextcloud vor 22).
+tree_dry_opt() {
+  local h
+  h=$(runocc help files:repair-tree 2>&1) || return 1
+  case "$h" in
+    *--dryRun*)  echo '--dryRun' ;;
+    *--dry-run*) echo '--dry-run' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Probelauf, gibt die Anzahl fehlerhafter Einträge aus (leer bei Fehler).
+tree_count() {
+  local opt out
+  opt=$(tree_dry_opt) || return 1
+  out=$(runocc files:repair-tree "$opt" 2>&1) || { printf '%s\n' "$out" >&2; return 1; }
+  printf '%s\n' "$out" | sed -n 's/^Found \([0-9][0-9]*\) file entr.*/\1/p' | head -1
+}
+
+# Ist die App Team-Ordner (groupfolders) aktiv? Ihr occ-Befehl existiert nur dann.
+groupfolders_active() { runocc help groupfolders:scan >/dev/null 2>&1; }
+
+do_tree_check() {
+  local n
+  if ! tree_dry_opt >/dev/null; then
+    echo 'Diese Nextcloud-Version kennt files:repair-tree nicht (erst ab Nextcloud 22).'; return 0
+  fi
+  echo '=== Datei-Struktur prüfen (files:repair-tree, Probelauf – ändert nichts) ==='
+  n=$(tree_count) || { echo 'FEHLER: Prüfung fehlgeschlagen (Ausgabe oben).'; return 1; }
+  [ -n "$n" ] || { echo 'FEHLER: Ergebnis nicht lesbar.'; return 1; }
+  if [ "$n" = 0 ]; then
+    echo 'In Ordnung: keine fehlerhaften Einträge im Datei-Verzeichnis (File-Cache).'
+  else
+    echo "GEFUNDEN: $n fehlerhafte Einträge im Datei-Verzeichnis (File-Cache)."
+    echo 'Folgen können sein: hochgeladene Dateien sind für andere unsichtbar, umbenannte Ordner verschwinden,'
+    echo 'im Log steht „File with id … has not been found“. Die Dateien selbst sind nicht betroffen.'
+    echo 'Abhilfe: Backup/Snapshot, dann „Datei-Struktur reparieren“.'
+  fi
+}
+
+# Repariert in bis zu 5 Durchgängen (verschachtelte Fehler brauchen mehrere) und liest danach die
+# Team-Ordner neu ein. Ändert nur Datenbank-Einträge, keine Dateien.
+do_tree_repair() {
+  local n pass=1
+  if ! tree_dry_opt >/dev/null; then
+    echo 'Diese Nextcloud-Version kennt files:repair-tree nicht (erst ab Nextcloud 22).'; return 0
+  fi
+  n=$(tree_count) || { echo 'FEHLER: Prüfung fehlgeschlagen.'; return 1; }
+  echo "Fehlerhafte Einträge vor der Reparatur: ${n:-?}"
+  while [ "${n:-1}" != 0 ] && [ "$pass" -le 5 ]; do
+    echo "=== Reparatur, Durchgang $pass ==="
+    runocc files:repair-tree || { echo 'FEHLER: files:repair-tree fehlgeschlagen.'; return 1; }
+    n=$(tree_count) || { echo 'FEHLER: Prüfung fehlgeschlagen.'; return 1; }
+    echo "Danach noch fehlerhaft: ${n:-?}"
+    pass=$((pass + 1))
+  done
+  if [ "${n:-1}" != 0 ]; then
+    echo "WARNUNG: Nach 5 Durchgängen sind noch ${n:-?} Einträge fehlerhaft. Aktion später erneut ausführen."
+    return 1
+  fi
+  echo 'In Ordnung: keine fehlerhaften Einträge mehr.'
+  if groupfolders_active; then
+    echo '=== Team-Ordner neu einlesen (groupfolders:scan --all) ==='
+    runocc groupfolders:scan --all || echo 'WARNUNG: Einlesen der Team-Ordner meldet einen Fehler (Ausgabe oben).'
+  fi
+  echo 'HINWEIS: Fehlen danach noch Dateien in persönlichen Ordnern, „Alle Dateien neu einlesen“ ausführen.'
+}
+
 # Nur eine ändernde Aktion gleichzeitig (Update, Repair, PHP …).
 take_lock() {
   exec 9>"$LOCK"
@@ -110,7 +179,7 @@ foreach (array_merge([$d . "/config.php"], glob($d . "/*.config.php") ?: []) as 
   $CONFIG = []; if (is_readable($f)) { include $f; } $c = array_merge($c, $CONFIG);
 }
 $o = [];
-foreach (["datadirectory", "dbtype", "dbhost", "dbname", "memcache.local", "memcache.distributed", "memcache.locking", "logfile", "log_type", "loglevel", "log_rotate_size", "htaccess.RewriteBase", "overwrite.cli.url"] as $k) { $o[$k] = $c[$k] ?? null; }
+foreach (["datadirectory", "dbtype", "dbhost", "dbname", "memcache.local", "memcache.distributed", "memcache.locking", "logfile", "log_type", "loglevel", "log_rotate_size", "htaccess.RewriteBase", "overwrite.cli.url", "trusted_domains"] as $k) { $o[$k] = $c[$k] ?? null; }
 echo json_encode($o, JSON_UNESCAPED_SLASHES);' -- "$NCM_NC_PATH/config" 2>/dev/null
 }
 
@@ -272,7 +341,7 @@ do_backup() {
   python3 -c 'import json,sys
 a = sys.argv
 json.dump({"complete": True, "version": a[1], "nc_path": a[2], "datadir": a[3], "created": a[4], "dbtype": a[6],
-           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.8.0"}, open(a[5], "w"))' \
+           "user_data_included": a[7] == "1", "reason": a[8], "manager_version": "0.9.2"}, open(a[5], "w"))' \
     "$(runocc status --output=json | json_get versionstring)" "$NCM_NC_PATH" "$datadir" "$ts" "$dir/info.json" \
     "$dbtype" "$include_data" "$reason"
   if [ "$include_data" = 1 ]; then local data_line="Benutzerdaten: ENTHALTEN (nextcloud-data.tar.gz, Stand $datadir)"
@@ -654,6 +723,11 @@ case "$ACTION" in
    if [ "$(runocc status --output=json | json_get maintenance)" = true ]; then
      echo 'HINWEIS: Wartungsmodus ist noch aktiv. Nach Prüfung unter "Wartung" ausschalten.'
    fi
+   n=$(tree_count 2>/dev/null) || n=''
+   if [ -n "$n" ] && [ "$n" != 0 ]; then
+     echo "HINWEIS: $n fehlerhafte Einträge im Datei-Verzeichnis gefunden."
+     echo 'Abhilfe unter „Wartung“ → „Datei-Struktur reparieren“ (vorher Backup).'
+   fi
    run_hook post-update || echo 'WARNUNG: post-update-Hook fehlgeschlagen.'
    echo 'UPDATE ERFOLGREICH ABGESCHLOSSEN.' ;;
 
@@ -778,6 +852,12 @@ case "$ACTION" in
    echo "Neu geladen: php$V-fpm" ;;
 
  files_scan)       take_lock; runocc files:scan --all ;;
+ tree_check)       take_lock; do_tree_check ;;
+ tree_repair)      take_lock; do_tree_repair ;;
+ groupfolders_scan)
+   take_lock
+   if groupfolders_active; then runocc groupfolders:scan --all
+   else echo 'Die App „Team-Ordner“ (groupfolders) ist nicht aktiv – nichts zu tun.'; fi ;;
  files_cleanup)    take_lock; runocc files:cleanup ;;
  trashbin_expire)  take_lock; run_expire trashbin:expire ;;
  versions_expire)  take_lock; run_expire versions:expire ;;
@@ -864,6 +944,13 @@ case "$ACTION" in
    web_test "$SRV" || { echo 'FEHLER: Konfigurationstest fehlgeschlagen – der Webserver wurde NICHT neu geladen.'; exit 68; }
    web_reload_service "$SRV" || { echo "FEHLER: $SRV konnte nicht neu geladen werden."; exit 69; }
    echo "$SRV neu geladen." ;;
+
+ net_info)
+   # Nur lesen: Adresse und Gateway der Standardroute (ip route get schickt keine Pakete), alle globalen Adressen.
+   route=$(ip -j route get 1.1.1.1 2>/dev/null) || route='[]'
+   addrs=$(ip -j addr show scope global 2>/dev/null) || addrs='[]'
+   json_out route:json "$route" addrs:json "$addrs" nc:json "$(nc_config)" \
+     hostname "$(hostname -f 2>/dev/null || hostname)" hostname_short "$(hostname)" ;;
 
  config_info)
    f_cfg=; tmpfile f_cfg; f_smp=; tmpfile f_smp

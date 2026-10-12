@@ -1,4 +1,4 @@
-# Nextcloud Server Manager v0.8.0
+# Nextcloud Server Manager v0.9.2
 
 Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- und Haftungsausschluss](HAFTUNGSAUSSCHLUSS.md)
 
@@ -9,13 +9,13 @@ Urheber: roswitina@hotmail.com · Lizenz: [MIT](LICENSE) · [Gewährleistungs- u
 > Nextcloud ist eine Marke der Nextcloud GmbH; dieses Projekt ist nicht mit ihr verbunden.
 
 Weboberfläche für den Betrieb einer Nextcloud auf Debian, Ubuntu und DietPi:
-Dashboard, Nextcloud-Prüfungen, PHP- und PHP-FPM-Konfiguration, Webserver-Prüfung (Apache/nginx), config.php mit Erklärungen, druckbarer Systembericht, App-Updates, Backups mit Prüfung
+Dashboard, Nextcloud-Prüfungen, PHP- und PHP-FPM-Konfiguration, Webserver-Prüfung (Apache/nginx), Reverse-Proxy-Assistent, config.php mit Erklärungen, druckbarer Systembericht, App-Updates, Backups mit Prüfung
 und Wiederherstellung, Diagnose, Logs, Wartungsbefehle und Update-Assistent.
 
 ## Installation / Upgrade
 
 ```bash
-tar xzf nc-manager-v0.8.0.tar.gz && cd nc-manager-v0.8.0
+tar xzf nc-manager-v0.9.2.tar.gz && cd nc-manager-v0.9.2
 sudo ./install.sh
 ```
 
@@ -40,6 +40,54 @@ Empfohlen ist **„nur localhost“**. Dann gibt es zwei Wege:
   ```
 
 Die Option „LAN“ funktioniert weiterhin, überträgt Passwort und Sitzung aber unverschlüsselt.
+
+## Änderungen in 0.9.2
+
+- **Wartung: Datei-Struktur prüfen und reparieren.** Neue Buttons für `occ files:repair-tree`. Hilft, wenn hochgeladene
+  Dateien nur für den Hochladenden sichtbar sind, umbenannte Ordner verschwinden oder im Log „File with id … has not
+  been found“ steht. „Prüfen“ ist ein Probelauf; „Reparieren“ läuft in bis zu fünf Durchgängen, bis nichts mehr gefunden
+  wird, und liest danach die Team-Ordner neu ein. Erkennt den ab Nextcloud 35 geänderten Optionsnamen (`--dryRun`).
+- **Wartung: Team-Ordner neu einlesen** (`groupfolders:scan --all`) – schneller als „Alle Dateien neu einlesen“.
+- Nach einem Nextcloud-Update prüft der Manager die Datei-Struktur und weist auf fehlerhafte Einträge hin.
+
+## Änderungen in 0.9.1
+
+- Seite Reverse-Proxy: Die vier Eingabefelder stehen jetzt auf einer Linie; Beschriftungen gekürzt.
+
+## Änderungen in 0.9.0
+
+- **Neue Seite „Reverse-Proxy“ – ein Assistent** für Nextcloud hinter einem Reverse-Proxy (z. B. `https://nc.domain.tld`
+  vor `http://192.168.1.55/nextcloud`). Aus vier Angaben – öffentliche Adresse, interne Adresse, IP des Proxys,
+  Proxy-Programm – zeigt er:
+  - die nötigen **config.php-Einstellungen** (trusted_domains, trusted_proxies, overwriteprotocol, overwritehost,
+    overwritewebroot, overwritecondaddr, overwrite.cli.url) im **Abgleich mit der aktuellen config.php**, jeweils erklärt,
+    und die fertigen `occ`-Befehle für alles, was fehlt. Gesetzt wird nichts automatisch.
+  - die **Proxy-Konfiguration** zum Kopieren für **Nginx Proxy Manager** (mit Klick-Anleitung je Reiter), **nginx**,
+    **Apache** und **Caddy**: Header, große Uploads, Timeouts, WebSockets, `/.well-known`-Weiterleitungen, HSTS.
+  - für Nextcloud im **Unterverzeichnis** (Standard bei DietPi) das in der Praxis bewährte Muster: gleicher Pfad
+    öffentlich und intern, Weiterleitung der Domain-Wurzel, auf Wunsch die Kern-Endpunkte auch ohne `/nextcloud`
+    (für Clients und Links, in denen nur die Domain steht).
+  - einen **Test vom Server aus** auf Knopfdruck: status.php, HSTS, `/.well-known/caldav` und `carddav`; mit Hinweis,
+    wenn der Router die eigene öffentliche Adresse nicht von innen erreicht (NAT-Loopback).
+  - Die Felder sind mit dem vorbelegt, was der Manager erkennt (Domain, LAN-IP, Pfad, bekannter Proxy).
+- Die erzeugten Konfigurationen sind gegen echte Proxys geprüft (nginx, Apache, Caddy; NPM-Text in einem
+  nginx-server-Block): Syntax sowie Weiterleitungen, Pfade und Header Ende-zu-Ende.
+- Neue Datei `proxyhelp.py` (vom Installer mitkopiert). 15 neue Tests, insgesamt 110.
+
+## Änderungen in 0.8.1
+
+- **Kopfzeile mit Netzwerkangaben** auf allen Seiten: Adresse der Nextcloud (overwrite.cli.url bzw. trusted_domains),
+  LAN-IP mit Netzwerkkarte, Gateway und die IP, auf die die Domain per DNS zeigt (Hinweis „interne Adresse“, wenn sie
+  ins Heimnetz zeigt). Die Angaben werden 5 Minuten zwischengespeichert; die DNS-Abfrage hat ein Zeitlimit.
+- **Öffentliche IP nur auf Knopfdruck** („ermitteln …“ in der Kopfzeile): Der Manager fragt dafür api.ipify.org
+  (ersatzweise icanhazip.com) – mit Rückfrage, weil dieser Dienst die Adresse des Servers sieht. Weicht sie von der
+  Domain-IP ab (z. B. Cloudflare-Tunnel, Proxy auf einem anderen Server, veralteter DynDNS-Eintrag), erscheint ein Hinweis.
+- **Systembericht:** neuer Abschnitt „Netzwerk“ und eine **Fassung zum Weitergeben**, die Domains, Hostnamen,
+  IP-Adressen, Mail-Server und -Adressen, Proxys und die Instanz-ID durch Platzhalter wie ‹Domain› ersetzt – z. B. um den
+  Bericht im Forum zu zeigen. Versionsnummern bleiben erhalten.
+- **Dashboard:** mehr Abstand zwischen „Betriebsbereit“ und dem Knopf „Systembericht drucken“; zusätzlicher Link zur
+  Fassung zum Weitergeben.
+- Neue Wrapper-Aktion `net_info` (nur lesen: `ip route get`, `ip addr`, Hostname). 9 neue Tests, insgesamt 95.
 
 ## Änderungen in 0.8.0
 
@@ -283,6 +331,7 @@ Basis ist 0.5.2. Die Ideen aus dem Entwicklungsstand 0.6.0 sind übernommen, des
 |---|---|
 | `app.py` | Flask-Web-App (läuft als `ncmanager`) |
 | `jobs.py` | Datenbank und Hintergrund-Jobs |
+| `proxyhelp.py` | Reverse-Proxy-Assistent: config.php-Plan, Proxy-Konfigurationen, Test |
 | `templates/`, `static/` | HTML-Vorlagen, CSS, JS |
 | `nc-manager-cmd` | einziger per sudo erlaubter Befehl, Whitelist aller Aktionen |
 | `ncm_helper.py` | Auswertungen für den Wrapper (Logs, FPM, DB-Dump/-Restore, Backup-Prüfung, Diagnose, Webserver-Konfiguration, config.sample.php, Ausblenden von Geheimnissen); root-eigen unter `/usr/local/lib/nc-manager` |

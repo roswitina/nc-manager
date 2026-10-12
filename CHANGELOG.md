@@ -2,6 +2,58 @@
 
 Alle nennenswerten Änderungen am Nextcloud Server Manager, neueste zuerst.
 
+## 0.9.2
+
+- **Wartung: „Datei-Struktur prüfen“ und „Datei-Struktur reparieren“** (`occ files:repair-tree`). Anlass: In einem
+  Team-Ordner waren hochgeladene Dateien nur für den Hochladenden sichtbar, umbenannte Ordner verschwanden, und im Log
+  stand „File with id … has not been found“ – Ursache waren 36 Einträge im File-Cache mit falschem Pfad.
+  Die Prüfung ist ein Probelauf. Die Reparatur läuft in bis zu fünf Durchgängen (verschachtelte Fehler brauchen mehrere),
+  bis der Probelauf nichts mehr findet, und liest danach die Team-Ordner neu ein. Der Optionsname des Probelaufs wird
+  erkannt (`--dryRun` ab Nextcloud 35, vorher `--dry-run`); Versionen ohne den Befehl bekommen einen Hinweis.
+- **Wartung: „Team-Ordner neu einlesen“** (`occ groupfolders:scan --all`), nur wenn die App aktiv ist.
+- Nextcloud-Update: Am Ende wird die Datei-Struktur geprüft; bei fehlerhaften Einträgen erscheint ein Hinweis.
+- 6 neue Tests (Wrapper gegen simulierte Nextcloud, Web-App).
+
+## 0.9.1
+
+- Seite Reverse-Proxy: Die vier Eingabefelder stehen jetzt auf einer Linie (vorher saßen sie je nach Länge der
+  Beschriftung unterschiedlich hoch). Beschriftungen gekürzt, die Erklärung erscheint beim Darüberfahren mit der Maus.
+
+## 0.9.0
+
+- **Neue Seite „Reverse-Proxy“ – ein Assistent** für Nextcloud hinter einem Reverse-Proxy (z. B. `https://nc.domain.tld`
+  vor `http://192.168.1.55/nextcloud`). Aus vier Angaben – öffentliche Adresse, interne Adresse, IP des Proxys,
+  Proxy-Programm – zeigt er:
+  - die nötigen **config.php-Einstellungen** (trusted_domains, trusted_proxies, overwriteprotocol, overwritehost,
+    overwritewebroot, overwritecondaddr, overwrite.cli.url) im **Abgleich mit der aktuellen config.php**, jeweils erklärt,
+    und die fertigen `occ`-Befehle für alles, was fehlt. Gesetzt wird nichts automatisch.
+  - die **Proxy-Konfiguration** zum Kopieren für **Nginx Proxy Manager** (mit Klick-Anleitung je Reiter), **nginx**,
+    **Apache** und **Caddy**: Header, große Uploads, Timeouts, WebSockets, `/.well-known`-Weiterleitungen, HSTS.
+  - für Nextcloud im **Unterverzeichnis** (Standard bei DietPi) das in der Praxis bewährte Muster: gleicher Pfad
+    öffentlich und intern, Weiterleitung der Domain-Wurzel, auf Wunsch die Kern-Endpunkte auch ohne `/nextcloud`
+    (für Clients und Links, in denen nur die Domain steht).
+  - einen **Test vom Server aus** auf Knopfdruck: status.php, HSTS, `/.well-known/caldav` und `carddav`; mit Hinweis,
+    wenn der Router die eigene öffentliche Adresse nicht von innen erreicht (NAT-Loopback).
+  - Die Felder sind mit dem vorbelegt, was der Manager erkennt (Domain, LAN-IP, Pfad, bekannter Proxy).
+- Die erzeugten Konfigurationen sind gegen echte Proxys geprüft (nginx, Apache, Caddy; NPM-Text in einem
+  nginx-server-Block): Syntax sowie Weiterleitungen, Pfade und Header Ende-zu-Ende.
+- Neue Datei `proxyhelp.py` (vom Installer mitkopiert). 15 neue Tests, insgesamt 110.
+
+## 0.8.1
+
+- **Kopfzeile mit Netzwerkangaben** auf allen Seiten: Adresse der Nextcloud (overwrite.cli.url bzw. trusted_domains),
+  LAN-IP mit Netzwerkkarte, Gateway und die IP, auf die die Domain per DNS zeigt (Hinweis „interne Adresse“, wenn sie
+  ins Heimnetz zeigt). Die Angaben werden 5 Minuten zwischengespeichert; die DNS-Abfrage hat ein Zeitlimit.
+- **Öffentliche IP nur auf Knopfdruck** („ermitteln …“ in der Kopfzeile): Der Manager fragt dafür api.ipify.org
+  (ersatzweise icanhazip.com) – mit Rückfrage, weil dieser Dienst die Adresse des Servers sieht. Weicht sie von der
+  Domain-IP ab (z. B. Cloudflare-Tunnel, Proxy auf einem anderen Server, veralteter DynDNS-Eintrag), erscheint ein Hinweis.
+- **Systembericht:** neuer Abschnitt „Netzwerk“ und eine **Fassung zum Weitergeben**, die Domains, Hostnamen,
+  IP-Adressen, Mail-Server und -Adressen, Proxys und die Instanz-ID durch Platzhalter wie ‹Domain› ersetzt – z. B. um den
+  Bericht im Forum zu zeigen. Versionsnummern bleiben erhalten.
+- **Dashboard:** mehr Abstand zwischen „Betriebsbereit“ und dem Knopf „Systembericht drucken“; zusätzlicher Link zur
+  Fassung zum Weitergeben.
+- Neue Wrapper-Aktion `net_info` (nur lesen: `ip route get`, `ip addr`, Hostname). 9 neue Tests, insgesamt 95.
+
 ## 0.8.0
 
 - **Neue Seite „config.php“.** Zeigt alle Einstellungen der Nextcloud – auch aus zusätzlichen `*.config.php`-Dateien –

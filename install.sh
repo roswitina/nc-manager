@@ -5,7 +5,7 @@
 # Lizenz: siehe LICENSE · Gewährleistungs- und Haftungsausschluss: siehe HAFTUNGSAUSSCHLUSS.md
 # Installer / Upgrade für den Nextcloud Server Manager.
 set -euo pipefail
-VERSION=0.8.0
+VERSION=0.9.2
 SRC="$(cd "$(dirname "$0")" && pwd)"
 [ "$EUID" -eq 0 ] || { echo 'Bitte als root/sudo starten.'; exit 1; }
 echo "=== Nextcloud Server Manager $VERSION Installer ==="
@@ -138,7 +138,7 @@ find "$BKDIR" -type f -exec chmod 600 {} + 2>/dev/null || true
 
 # Programmdateien ersetzen (venv bleibt erhalten).
 rm -rf /opt/nc-manager/templates /opt/nc-manager/static /opt/nc-manager/__pycache__
-cp "$SRC/app.py" "$SRC/jobs.py" "$SRC/requirements.txt" "$SRC/LICENSE" "$SRC/HAFTUNGSAUSSCHLUSS.md" /opt/nc-manager/
+cp "$SRC/app.py" "$SRC/jobs.py" "$SRC/proxyhelp.py" "$SRC/requirements.txt" "$SRC/LICENSE" "$SRC/HAFTUNGSAUSSCHLUSS.md" /opt/nc-manager/
 cp -r "$SRC/templates" "$SRC/static" /opt/nc-manager/
 install -m 0755 -o root -g root "$SRC/nc-manager-cmd" /usr/local/sbin/nc-manager-cmd
 # Der Helfer läuft als root – er muss root gehören und darf für ncmanager nicht beschreibbar sein.
